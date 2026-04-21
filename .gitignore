@@ -1,0 +1,48 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependencies
+node_modules
+
+# Build outputs
+dist
+dist-ssr
+dist-electron
+release
+
+# TypeScript build artifacts
+tsconfig.tsbuildinfo
+vite.config.d.ts
+src/**/*.d.ts
+src/**/*.js
+
+# Intermediate icon assets (keep build/icon.icns, exclude the working folder)
+build/icon.iconset
+
+# Compiled electron main (source is main.ts)
+electron/main.js
+
+# Claude Code local settings
+.claude/
+
+# Local env / secrets
+*.local
+.env
+.env.*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
