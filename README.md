@@ -1,3 +1,9 @@
+# Momo
+
+I heavily dislike wrangling a bunch of programs, so I put one together that follows my process on reading papers. Momo collects all the papers stored on your Zotero. For every workspace, you have to go through the whole thing to sort out what is relevant and what is not. I dislike tags and categories, so it's literally just about reminding yourself of the papers relevant to you. You can assemble them, draw stuff, write stuff and you can even highlight stuff in a PDF reader. To have a comprehensive understanding for my paper, I basically construct an assemblage of all the prior work. You can export all the papers on a workspace so you can directly put it into your Overleaf file. 
+
+This is not a product, and I will not broaden its general scope.
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
