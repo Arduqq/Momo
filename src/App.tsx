@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { Canvas } from './components/Canvas'
 import { Settings } from './components/Settings'
-import { Settings as SettingsIcon, Layers, Plus, X, Download } from 'lucide-react'
+import { Settings as SettingsIcon, Layers, Plus, X, Download, ArrowDownCircle, CheckCircle2 } from 'lucide-react'
 
 interface Workspace {
   id: string;
@@ -17,7 +17,11 @@ function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [placedItemKeys, setPlacedItemKeys] = useState<Set<string>>(new Set())
   const [crossPageItems, setCrossPageItems] = useState<Map<string, string[]>>(new Map())
-  const [updateReady, setUpdateReady] = useState(false)
+  const [currentVersion, setCurrentVersion] = useState('')
+  const [updateState, setUpdateState] = useState<{
+    phase: 'idle' | 'available' | 'downloading' | 'ready';
+    version: string; releaseNotes: string; percent: number; dismissed: boolean;
+  }>({ phase: 'idle', version: '', releaseNotes: '', percent: 0, dismissed: false })
 
   const loadSettings = async () => {
     const id = await window.ipcRenderer.invoke('get-store-value', 'zotero-user-id')
@@ -60,7 +64,16 @@ function App() {
   useEffect(() => {
     loadSettings()
     loadWorkspaces()
-    window.ipcRenderer.on('update-downloaded', () => setUpdateReady(true))
+    window.ipcRenderer.invoke('get-app-version').then((v: string) => setCurrentVersion(v || ''))
+    window.ipcRenderer.on('update-available', (_e: any, info: { version: string; releaseNotes: string }) => {
+      setUpdateState(s => ({ ...s, phase: 'available', version: info.version, releaseNotes: info.releaseNotes, dismissed: false }))
+    })
+    window.ipcRenderer.on('update-download-progress', (_e: any, { percent }: { percent: number }) => {
+      setUpdateState(s => ({ ...s, phase: 'downloading', percent }))
+    })
+    window.ipcRenderer.on('update-downloaded', (_e: any, info: { version: string }) => {
+      setUpdateState(s => ({ ...s, phase: 'ready', version: info?.version || s.version, percent: 100, dismissed: false }))
+    })
   }, [])
 
   return (
@@ -68,38 +81,20 @@ function App() {
       <Sidebar userId={userId} apiKey={apiKey} workspaceId={activeWorkspaceId} placedItemKeys={placedItemKeys} crossPageItems={crossPageItems} />
 
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
-        {updateReady && (
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '8px 16px', backgroundColor: '#4f46e5', color: '#fff',
-            fontSize: '12.5px', fontWeight: 500, flexShrink: 0, gap: 12,
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Download size={14} />
-              A new version of Momo has been downloaded and is ready to install.
-            </div>
-            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-              <button
-                onClick={() => window.ipcRenderer.invoke('restart-and-update')}
-                style={{
-                  border: '1px solid rgba(255,255,255,0.5)', background: 'rgba(255,255,255,0.15)',
-                  color: '#fff', borderRadius: 5, padding: '3px 10px',
-                  fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-                }}
-              >
-                Restart &amp; Update
-              </button>
-              <button
-                onClick={() => setUpdateReady(false)}
-                style={{
-                  border: 'none', background: 'none', color: 'rgba(255,255,255,0.7)',
-                  cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center',
-                }}
-              >
-                <X size={14} />
-              </button>
-            </div>
-          </div>
+        {!updateState.dismissed && updateState.phase !== 'idle' && (
+          <UpdateModal
+            phase={updateState.phase}
+            version={updateState.version}
+            currentVersion={currentVersion}
+            releaseNotes={updateState.releaseNotes}
+            percent={updateState.percent}
+            onUpdate={() => {
+              setUpdateState(s => ({ ...s, phase: 'downloading', percent: 0 }))
+              window.ipcRenderer.invoke('start-update-download')
+            }}
+            onRestart={() => window.ipcRenderer.invoke('restart-and-update')}
+            onDismiss={() => setUpdateState(s => ({ ...s, dismissed: true }))}
+          />
         )}
         <header style={{
           height: '48px',
@@ -349,6 +344,144 @@ function WorkspaceTabs({ workspaces, activeId, onSelect, onCreate, onDelete, onR
           <Plus size={14} />
         </button>
       )}
+    </div>
+  )
+}
+
+// ─── UpdateModal ──────────────────────────────────────────────────────────────
+
+function formatReleaseNotes(notes: string): React.ReactNode {
+  if (!notes.trim()) return <p style={{ color: '#9ca3af', fontStyle: 'italic', margin: 0, fontSize: 12 }}>No release notes available.</p>
+  return notes.split('\n').map((line, i) => {
+    if (!line.trim()) return <div key={i} style={{ height: 5 }} />
+    if (/^#{1,3}\s/.test(line)) return (
+      <div key={i} style={{ fontWeight: 700, fontSize: 11.5, color: '#111', marginTop: 8, marginBottom: 2 }}>
+        {line.replace(/^#+\s/, '')}
+      </div>
+    )
+    if (/^[-*]\s/.test(line)) return (
+      <div key={i} style={{ display: 'flex', gap: 6, fontSize: 12, color: '#374151', lineHeight: '1.5' }}>
+        <span style={{ color: '#6366f1', flexShrink: 0 }}>•</span>
+        <span>{line.replace(/^[-*]\s/, '')}</span>
+      </div>
+    )
+    return <div key={i} style={{ fontSize: 12, color: '#4b5563', lineHeight: '1.5' }}>{line}</div>
+  })
+}
+
+function UpdateModal({ phase, version, currentVersion, releaseNotes, percent, onUpdate, onRestart, onDismiss }: {
+  phase: 'available' | 'downloading' | 'ready';
+  version: string; currentVersion: string; releaseNotes: string; percent: number;
+  onUpdate: () => void; onRestart: () => void; onDismiss: () => void;
+}) {
+  const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  const isDownloading = phase === 'downloading'
+  const isReady = phase === 'ready'
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 1000,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: font,
+    }}>
+      <div style={{
+        backgroundColor: '#fff', borderRadius: 14,
+        boxShadow: '0 24px 64px rgba(0,0,0,0.22)',
+        width: 440, maxWidth: 'calc(100vw - 40px)',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: '22px 24px 16px',
+          borderBottom: '1px solid #f3f4f6',
+          display: 'flex', alignItems: 'flex-start', gap: 14,
+        }}>
+          <div style={{ flexShrink: 0, marginTop: 2 }}>
+            {isReady
+              ? <CheckCircle2 size={28} color="#16a34a" />
+              : <ArrowDownCircle size={28} color="#6366f1" />}
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 700, fontSize: 16, color: '#111' }}>
+              {isReady ? 'Ready to Install' : isDownloading ? `Downloading Momo ${version}…` : `Momo ${version} Available`}
+            </div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 3 }}>
+              {isReady
+                ? `Momo ${version} has been downloaded and is ready to install.`
+                : isDownloading
+                ? 'The update is downloading in the background.'
+                : currentVersion ? `You're on v${currentVersion}` : 'A new version is ready to download.'}
+            </div>
+          </div>
+          {!isDownloading && (
+            <button onClick={onDismiss} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2, flexShrink: 0, display: 'flex' }}>
+              <X size={16} />
+            </button>
+          )}
+        </div>
+
+        {/* Release notes */}
+        {!isDownloading && releaseNotes && (
+          <div style={{ padding: '14px 24px', borderBottom: '1px solid #f3f4f6' }}>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 8 }}>
+              What's new
+            </div>
+            <div style={{ maxHeight: 180, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {formatReleaseNotes(releaseNotes)}
+            </div>
+          </div>
+        )}
+
+        {/* Progress bar */}
+        {isDownloading && (
+          <div style={{ padding: '18px 24px', borderBottom: '1px solid #f3f4f6' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: '#6b7280', marginBottom: 8 }}>
+              <span>Downloading…</span>
+              <span>{percent}%</span>
+            </div>
+            <div style={{ height: 6, backgroundColor: '#f3f4f6', borderRadius: 99, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', borderRadius: 99,
+                backgroundColor: '#6366f1',
+                width: `${percent}%`,
+                transition: 'width 0.3s ease',
+              }} />
+            </div>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div style={{ padding: '14px 24px', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          {!isDownloading && (
+            <button onClick={onDismiss} style={{
+              border: '1px solid #e5e7eb', backgroundColor: '#fff', color: '#374151',
+              borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 500,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}>
+              Later
+            </button>
+          )}
+          <button
+            onClick={isReady ? onRestart : isDownloading ? undefined : onUpdate}
+            disabled={isDownloading}
+            style={{
+              border: 'none',
+              backgroundColor: isReady ? '#16a34a' : isDownloading ? '#a5b4fc' : '#6366f1',
+              color: '#fff', borderRadius: 7, padding: '7px 16px', fontSize: 13, fontWeight: 600,
+              cursor: isDownloading ? 'default' : 'pointer', fontFamily: 'inherit',
+              display: 'flex', alignItems: 'center', gap: 6,
+              opacity: isDownloading ? 0.7 : 1,
+            }}
+          >
+            {isReady
+              ? <><CheckCircle2 size={13} /> Restart &amp; Install</>
+              : isDownloading
+              ? <><Download size={13} /> Downloading…</>
+              : <><Download size={13} /> Update Now</>}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

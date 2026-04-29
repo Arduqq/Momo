@@ -227,12 +227,62 @@ ipcMain.handle('restart-and-update', () => {
   autoUpdater.quitAndInstall()
 })
 
+ipcMain.handle('start-update-download', () => {
+  autoUpdater.downloadUpdate()
+})
+
+ipcMain.handle('check-for-updates', () => {
+  if (app.isPackaged) autoUpdater.checkForUpdates()
+})
+
+ipcMain.handle('get-app-version', () => app.getVersion())
+
+// Cache update info in case it arrives before the renderer is ready
+let pendingUpdateInfo: { version: string; releaseNotes: string } | null = null
+
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('update-available', (info) => {
+    const payload = {
+      version: info.version,
+      releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
+    }
+    if (win?.webContents && !win.webContents.isLoading()) {
+      win.webContents.send('update-available', payload)
+    } else {
+      pendingUpdateInfo = payload
+    }
+  })
+
+  autoUpdater.on('download-progress', (progress) => {
+    win?.webContents.send('update-download-progress', { percent: Math.round(progress.percent) })
+  })
+
+  autoUpdater.on('update-downloaded', (info) => {
+    win?.webContents.send('update-downloaded', { version: info.version })
+  })
+
+  autoUpdater.on('error', (err) => {
+    console.error('[auto-updater] error:', err?.message)
+  })
+}
+
 app.whenReady().then(() => {
   createWindow()
+
   if (app.isPackaged) {
-    autoUpdater.on('update-downloaded', () => {
-      win?.webContents.send('update-downloaded')
+    setupAutoUpdater()
+    // Wait for renderer to finish loading before checking, so the
+    // update-available payload is never lost to a race condition.
+    win?.webContents.on('did-finish-load', () => {
+      if (pendingUpdateInfo) {
+        win?.webContents.send('update-available', pendingUpdateInfo)
+        pendingUpdateInfo = null
+      } else {
+        setTimeout(() => autoUpdater.checkForUpdates(), 2000)
+      }
     })
-    autoUpdater.checkForUpdatesAndNotify()
   }
 })
