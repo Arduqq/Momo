@@ -14,6 +14,7 @@ interface SidebarProps {
   apiKey: string;
   workspaceId: string | null;
   placedItemKeys: Set<string>;
+  crossPageItems: Map<string, string[]>;
 }
 
 function extractYear(date?: string): string {
@@ -32,7 +33,7 @@ const SORT_LABELS: { value: ZoteroSort; label: string }[] = [
   { value: 'title', label: 'Title' },
 ];
 
-export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, placedItemKeys }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, placedItemKeys, crossPageItems }) => {
   const [items, setItems] = useState<ZoteroItem[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [hiddenItems, setHiddenItems] = useState<HiddenItem[]>([]);
@@ -263,6 +264,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
                     onDragStart={e => onDragStart(e, item)}
                     workspaceId={workspaceId}
                     checkPdf={checkPdf}
+                    pageNames={crossPageItems.get(item.key)}
                   />
                 ))}
                 {visibleItems.length === 0 && !loading && (
@@ -307,12 +309,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
 
 interface PdfStatus { loading: boolean; attachmentKey: string; exists: boolean }
 
-function LibraryCard({ item, expanded, onToggle, onHide, onDragStart, workspaceId, checkPdf }: {
+function LibraryCard({ item, expanded, onToggle, onHide, onDragStart, workspaceId, checkPdf, pageNames }: {
   item: ZoteroItem; expanded: boolean;
   onToggle: () => void; onHide: () => void;
   onDragStart: (e: React.DragEvent) => void;
   workspaceId: string | null;
   checkPdf: (item: ZoteroItem) => Promise<{ attachmentKey: string; exists: boolean }>;
+  pageNames?: string[];
 }) {
   const year = extractYear(item.data.date);
   const venue = extractVenue(item);
@@ -363,6 +366,19 @@ function LibraryCard({ item, expanded, onToggle, onHide, onDragStart, workspaceI
         {extractCiteKey(item.data.extra) && (
           <div style={{ fontSize: 10, color: '#d1d5db', marginLeft: 18, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             @{extractCiteKey(item.data.extra)}
+          </div>
+        )}
+        {pageNames && pageNames.length > 0 && (
+          <div style={{ marginLeft: 18, marginTop: 2, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {pageNames.map(name => (
+              <span key={name} style={{
+                fontSize: 9.5, color: '#818cf8', backgroundColor: '#eef2ff',
+                border: '1px solid #c7d2fe', borderRadius: 4,
+                padding: '1px 5px', lineHeight: '14px', whiteSpace: 'nowrap',
+              }}>
+                {name}
+              </span>
+            ))}
           </div>
         )}
       </div>

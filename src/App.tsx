@@ -16,6 +16,7 @@ function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [placedItemKeys, setPlacedItemKeys] = useState<Set<string>>(new Set())
+  const [crossPageItems, setCrossPageItems] = useState<Map<string, string[]>>(new Map())
   const [updateReady, setUpdateReady] = useState(false)
 
   const loadSettings = async () => {
@@ -64,7 +65,7 @@ function App() {
 
   return (
     <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
-      <Sidebar userId={userId} apiKey={apiKey} workspaceId={activeWorkspaceId} placedItemKeys={placedItemKeys} />
+      <Sidebar userId={userId} apiKey={apiKey} workspaceId={activeWorkspaceId} placedItemKeys={placedItemKeys} crossPageItems={crossPageItems} />
 
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
         {updateReady && (
@@ -151,7 +152,7 @@ function App() {
           </button>
         </header>
 
-        <Canvas workspaceId={activeWorkspaceId} userId={userId} apiKey={apiKey} onPlacedKeysChange={setPlacedItemKeys} />
+        <Canvas workspaceId={activeWorkspaceId} userId={userId} apiKey={apiKey} onPlacedKeysChange={(keys, cross) => { setPlacedItemKeys(keys); setCrossPageItems(cross) }} />
       </main>
 
       {showSettings && (
