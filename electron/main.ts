@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron'
-import { autoUpdater } from 'electron-updater'
+import pkg from 'electron-updater'
+const { autoUpdater } = pkg
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -133,6 +134,36 @@ ipcMain.handle('locate-pdf', async (_event, attachmentKey: string) => {
     return true
   } catch {
     return false
+  }
+})
+
+ipcMain.handle('get-workspace-background', (_event, workspaceId: string) => {
+  return store.get(`background-${workspaceId}`, null)
+})
+
+ipcMain.handle('set-workspace-background', (_event, workspaceId: string, bg: any) => {
+  store.set(`background-${workspaceId}`, bg)
+  return true
+})
+
+ipcMain.handle('pick-background-image', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Select Background Image',
+    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] }],
+    properties: ['openFile'],
+  })
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0]
+})
+
+ipcMain.handle('read-image-file', (_event, filePath: string) => {
+  try {
+    const buffer = fs.readFileSync(filePath)
+    const ext = path.extname(filePath).toLowerCase()
+    const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
+    return `data:${mime};base64,${buffer.toString('base64')}`
+  } catch {
+    return null
   }
 })
 
