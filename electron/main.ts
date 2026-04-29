@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -191,4 +192,16 @@ app.on('activate', () => {
   }
 })
 
-app.whenReady().then(createWindow)
+ipcMain.handle('restart-and-update', () => {
+  autoUpdater.quitAndInstall()
+})
+
+app.whenReady().then(() => {
+  createWindow()
+  if (app.isPackaged) {
+    autoUpdater.on('update-downloaded', () => {
+      win?.webContents.send('update-downloaded')
+    })
+    autoUpdater.checkForUpdatesAndNotify()
+  }
+})

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { Canvas } from './components/Canvas'
 import { Settings } from './components/Settings'
-import { Settings as SettingsIcon, Layers, Plus, X } from 'lucide-react'
+import { Settings as SettingsIcon, Layers, Plus, X, Download } from 'lucide-react'
 
 interface Workspace {
   id: string;
@@ -16,6 +16,7 @@ function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([])
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [placedItemKeys, setPlacedItemKeys] = useState<Set<string>>(new Set())
+  const [updateReady, setUpdateReady] = useState(false)
 
   const loadSettings = async () => {
     const id = await window.ipcRenderer.invoke('get-store-value', 'zotero-user-id')
@@ -58,6 +59,7 @@ function App() {
   useEffect(() => {
     loadSettings()
     loadWorkspaces()
+    window.ipcRenderer.on('update-downloaded', () => setUpdateReady(true))
   }, [])
 
   return (
@@ -65,6 +67,39 @@ function App() {
       <Sidebar userId={userId} apiKey={apiKey} workspaceId={activeWorkspaceId} placedItemKeys={placedItemKeys} />
 
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
+        {updateReady && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '8px 16px', backgroundColor: '#4f46e5', color: '#fff',
+            fontSize: '12.5px', fontWeight: 500, flexShrink: 0, gap: 12,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Download size={14} />
+              A new version of Momo has been downloaded and is ready to install.
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              <button
+                onClick={() => window.ipcRenderer.invoke('restart-and-update')}
+                style={{
+                  border: '1px solid rgba(255,255,255,0.5)', background: 'rgba(255,255,255,0.15)',
+                  color: '#fff', borderRadius: 5, padding: '3px 10px',
+                  fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >
+                Restart &amp; Update
+              </button>
+              <button
+                onClick={() => setUpdateReady(false)}
+                style={{
+                  border: 'none', background: 'none', color: 'rgba(255,255,255,0.7)',
+                  cursor: 'pointer', padding: '2px', display: 'flex', alignItems: 'center',
+                }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        )}
         <header style={{
           height: '48px',
           borderBottom: '1px solid #eee',
