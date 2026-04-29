@@ -2,12 +2,13 @@ import { Tldraw, createShapeId, Editor } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { PaperCardShapeUtil } from './PaperCard'
 import { LinkCardShapeUtil, LINK_W, LINK_H } from './LinkCard'
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { generateThumbnail } from '../utils/pdfThumbnail'
 import { generateBibEntry, makeCiteKey, assembleBibFile } from '../utils/bibtex'
 import { ZoteroClient } from '../api/zotero'
+import type { ZoteroAnnotation } from '../api/zotero'
 import TextareaAutosize from 'react-textarea-autosize'
-import { X, FileText, Download, Check, Loader2 } from 'lucide-react'
+import { X, FileText, Download, Check, Loader2, RefreshCw } from 'lucide-react'
 import { PdfViewer } from './PdfViewer'
 
 const customShapeUtils = [PaperCardShapeUtil, LinkCardShapeUtil]
@@ -321,6 +322,8 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
               pdfKey: selectedCard.props.pdfKey,
               title: selectedCard.props.title,
             })}
+            userId={userId}
+            apiKey={apiKey}
           />
         )}
       </div>
@@ -355,13 +358,43 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
   )
 }
 
-function DetailPanel({ card, onUpdate, onClose, onOpenPdf }: {
+function DetailPanel({ card, onUpdate, onClose, onOpenPdf, userId, apiKey }: {
   card: SelectedCard;
   onUpdate: (props: Partial<SelectedCard['props']>) => void;
   onClose: () => void;
   onOpenPdf: () => void;
+  userId: string;
+  apiKey: string;
 }) {
   const { title, authors, year, venue, contribution, relationship, abstract, read, citeKey } = card.props;
+  const [annotations, setAnnotations] = useState<ZoteroAnnotation[]>([]);
+  const [annotationsLoading, setAnnotationsLoading] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
+  const client = useMemo(() => new ZoteroClient(userId, apiKey), [userId, apiKey]);
+
+  useEffect(() => {
+    if (!userId || !apiKey) return;
+    let cancelled = false;
+    setAnnotations([]);
+    setAnnotationsLoading(true);
+    (async () => {
+      try {
+        let pdfKey = card.props.pdfKey;
+        if (!pdfKey && card.props.itemKey) {
+          pdfKey = await client.getPdfAttachmentKey(card.props.itemKey);
+        }
+        if (!pdfKey || cancelled) { setAnnotationsLoading(false); return; }
+        const annots = await client.getAnnotations(pdfKey);
+        if (!cancelled) {
+          setAnnotations(annots.filter(a => a.data.annotationText?.trim()));
+          setAnnotationsLoading(false);
+        }
+      } catch {
+        if (!cancelled) setAnnotationsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [card.id, card.props.pdfKey, card.props.itemKey, userId, apiKey, client, refreshTick]);
 
   return (
     <div style={{
@@ -506,6 +539,84 @@ function DetailPanel({ card, onUpdate, onClose, onOpenPdf }: {
           value={relationship}
           onChange={v => onUpdate({ relationship: v })}
         />
+
+        {/* Highlights */}
+        <div>
+          <div style={{
+            fontSize: '10.5px',
+            fontWeight: '600',
+            color: '#6366f1',
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+            marginBottom: '7px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}>
+            Highlights
+            {annotationsLoading
+              ? <Loader2 size={11} style={{ animation: 'spin 1s linear infinite' }} />
+              : <button
+                  onClick={() => setRefreshTick(t => t + 1)}
+                  title="Refresh highlights"
+                  style={{
+                    border: 'none', background: 'none', cursor: 'pointer',
+                    color: '#9ca3af', padding: '1px', display: 'flex', alignItems: 'center',
+                    borderRadius: 4,
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.color = '#6366f1')}
+                  onMouseLeave={e => (e.currentTarget.style.color = '#9ca3af')}
+                >
+                  <RefreshCw size={11} />
+                </button>
+            }
+            {!annotationsLoading && annotations.length > 0 && (
+              <span style={{
+                backgroundColor: '#eef2ff', color: '#6366f1',
+                borderRadius: 8, fontSize: 10, fontWeight: 700, padding: '1px 6px',
+              }}>
+                {annotations.length}
+              </span>
+            )}
+          </div>
+          {!annotationsLoading && annotations.length === 0 && (
+            <div style={{ fontSize: '12px', color: '#9ca3af', fontStyle: 'italic' }}>
+              No highlights found.
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {annotations.map(a => (
+              <div key={a.key} style={{
+                borderLeft: `3px solid ${a.data.annotationColor || '#ffd400'}`,
+                paddingLeft: '10px',
+                paddingTop: '5px',
+                paddingBottom: '5px',
+                backgroundColor: '#fafafa',
+                borderRadius: '0 6px 6px 0',
+                border: '1px solid #f0f0f0',
+                borderLeftWidth: '3px',
+                borderLeftColor: a.data.annotationColor || '#ffd400',
+              }}>
+                <div style={{ fontSize: '12.5px', color: '#374151', lineHeight: '1.55', fontStyle: 'italic' }}>
+                  "{a.data.annotationText}"
+                </div>
+                {a.data.annotationPageLabel && (
+                  <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '3px' }}>
+                    p. {a.data.annotationPageLabel}
+                  </div>
+                )}
+                {a.data.annotationComment && (
+                  <div style={{
+                    fontSize: '11.5px', color: '#4b5563', marginTop: '5px',
+                    padding: '4px 7px', backgroundColor: '#f3f4f6', borderRadius: '4px',
+                  }}>
+                    {a.data.annotationComment}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )
