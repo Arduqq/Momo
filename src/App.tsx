@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { Canvas } from './components/Canvas'
 import { Settings } from './components/Settings'
@@ -17,6 +17,10 @@ function App() {
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null)
   const [placedItemKeys, setPlacedItemKeys] = useState<Set<string>>(new Set())
   const [crossPageItems, setCrossPageItems] = useState<Map<string, string[]>>(new Map())
+  const handlePlacedKeysChange = useCallback((keys: Set<string>, cross: Map<string, string[]>) => {
+    setPlacedItemKeys(keys)
+    setCrossPageItems(cross)
+  }, [])
   const [currentVersion, setCurrentVersion] = useState('')
   const [updateState, setUpdateState] = useState<{
     phase: 'idle' | 'available' | 'downloading' | 'ready';
@@ -147,7 +151,7 @@ function App() {
           </button>
         </header>
 
-        <Canvas workspaceId={activeWorkspaceId} userId={userId} apiKey={apiKey} onPlacedKeysChange={(keys, cross) => { setPlacedItemKeys(keys); setCrossPageItems(cross) }} />
+        <Canvas workspaceId={activeWorkspaceId} userId={userId} apiKey={apiKey} onPlacedKeysChange={handlePlacedKeysChange} />
       </main>
 
       {showSettings && (

@@ -54,6 +54,8 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
   const [pdfOpen, setPdfOpen] = useState<{ itemKey: string; pdfKey: string; title: string } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const lastPlacedKeysRef = useRef<Set<string>>(new Set())
+  const lastSelectedIdRef = useRef<string | null>(null)
+  const lastPageIdRef = useRef<string>('')
   const [exportState, setExportState] = useState<'idle' | 'busy' | 'done'>('idle')
   const [background, setBackground] = useState<BackgroundConfig>(DEFAULT_BG)
   const [showBgPanel, setShowBgPanel] = useState(false)
@@ -97,14 +99,53 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
   // Track selected paper-card + placed keys
   useEffect(() => {
     if (!editor) return
-    return editor.store.listen(() => {
-      // Selected card
-      const shapes = editor.getSelectedShapes()
-      const card = shapes.find((s: any) => s.type === 'paper-card') as any
-      setSelectedCard(card ? { id: card.id, props: card.props } : null)
+    return editor.store.listen(({ changes }) => {
+      const addedIds = Object.keys(changes.added)
+      const removedIds = Object.keys(changes.removed)
+      const updatedIds = Object.keys(changes.updated)
 
-      // Current-page placed keys (for hiding from sidebar)
+      // ── Selection ────────────────────────────────────────────────────────────
+      // instance_page_state holds selectedShapeIds. Camera lives in camera: records,
+      // so this does NOT fire during panning — only on real selection changes.
+      if (updatedIds.some(id => id.startsWith('instance_page_state:'))) {
+        const shapes = editor.getSelectedShapes()
+        const card = shapes.find((s: any) => s.type === 'paper-card') as any
+        const newId = card?.id ?? null
+        if (newId !== lastSelectedIdRef.current) {
+          lastSelectedIdRef.current = newId
+          setSelectedCard(card ? { id: card.id, props: card.props } : null)
+        }
+      }
+
+      // When the selected card's own props change (user editing text in the panel),
+      // update selectedCard. Use object identity on props — tldraw creates a new
+      // props object only when props actually change, not on position moves.
+      if (lastSelectedIdRef.current && updatedIds.includes(lastSelectedIdRef.current)) {
+        const entry = (changes.updated as any)[lastSelectedIdRef.current]
+        if (entry) {
+          const [oldShape, newShape] = entry
+          if (oldShape.props !== newShape.props) {
+            setSelectedCard({ id: newShape.id, props: newShape.props })
+          }
+        }
+      }
+
+      // ── Placed keys / cross-page map ─────────────────────────────────────────
+      // Detect page switch via ref — avoids treating instance: updates (tool state,
+      // drag start, etc.) as triggers, which was the source of pan/drag start lag.
       const currentPageId = editor.getCurrentPageId()
+      const pageChanged = currentPageId !== lastPageIdRef.current
+      if (pageChanged) lastPageIdRef.current = currentPageId
+
+      // Only rescan when shapes are added/removed, pages change, or user switched page.
+      // shape:updated during drag is position-only → skip entirely.
+      const needsRescan =
+        [...addedIds, ...removedIds].some(id => id.startsWith('shape:')) ||
+        [...addedIds, ...removedIds, ...updatedIds].some(id => id.startsWith('page:')) ||
+        pageChanged
+
+      if (!needsRescan) return
+
       const newKeys = new Set<string>()
       for (const id of editor.getCurrentPageShapeIds()) {
         const s = editor.getShape(id) as any
@@ -114,7 +155,6 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         }
       }
 
-      // Cross-page map: itemKey -> page names (excluding current page)
       const crossPageMap = new Map<string, string[]>()
       for (const page of editor.getPages()) {
         if (page.id === currentPageId) continue
