@@ -94,7 +94,12 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
   }, [itemKey, initialPdfKey, zotero])
 
   useEffect(() => {
-    const h = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    const h = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      // Prevent the native Electron find bar — it renders inside the window frame
+      // and shifts the fixed-position PDF viewer layout.
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') e.preventDefault()
+    }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
   }, [onClose])
@@ -145,10 +150,10 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
         <FileText size={16} color="#6366f1" />
         <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: '#f4f4f5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
         {pdf && <span style={{ fontSize: 11, color: '#71717a', flexShrink: 0 }}>{pdf.numPages} {pdf.numPages === 1 ? 'page' : 'pages'}</span>}
-        <button onClick={onClose} style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: '#71717a', padding: 4, display: 'flex', borderRadius: 4 }}
-          onMouseEnter={e => (e.currentTarget.style.color = '#f4f4f5')}
-          onMouseLeave={e => (e.currentTarget.style.color = '#71717a')}>
-          <X size={16} />
+        <button onClick={onClose} title="Close (Esc)" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: '#71717a', padding: '6px 8px', display: 'flex', alignItems: 'center', borderRadius: 6, minWidth: 32, justifyContent: 'center' }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#f4f4f5'; e.currentTarget.style.backgroundColor = '#27272a' }}
+          onMouseLeave={e => { e.currentTarget.style.color = '#71717a'; e.currentTarget.style.backgroundColor = 'transparent' }}>
+          <X size={18} />
         </button>
       </div>
 

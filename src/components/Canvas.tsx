@@ -50,7 +50,7 @@ interface CanvasProps {
 
 export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: CanvasProps) => {
   const [editor, setEditor] = useState<Editor | null>(null)
-  const [selectedCard, setSelectedCard] = useState<SelectedCard | null>(null)
+  const [pinnedCard, setPinnedCard] = useState<SelectedCard | null>(null)
   const [pdfOpen, setPdfOpen] = useState<{ itemKey: string; pdfKey: string; title: string } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const lastPlacedKeysRef = useRef<Set<string>>(new Set())
@@ -63,6 +63,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
 
   const onMount = useCallback((ed: Editor) => {
     setEditor(ed)
+    ed.user.updateUserPreferences({ locale: 'en' })
   }, [])
 
   // Load background per workspace
@@ -113,19 +114,20 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         const newId = card?.id ?? null
         if (newId !== lastSelectedIdRef.current) {
           lastSelectedIdRef.current = newId
-          setSelectedCard(card ? { id: card.id, props: card.props } : null)
+          // Only update the pinned panel when a card is actively selected —
+          // deselecting leaves the panel showing the last paper.
+          if (card) setPinnedCard({ id: card.id, props: card.props })
         }
       }
 
       // When the selected card's own props change (user editing text in the panel),
-      // update selectedCard. Use object identity on props — tldraw creates a new
-      // props object only when props actually change, not on position moves.
+      // update both selectedCard and pinnedCard.
       if (lastSelectedIdRef.current && updatedIds.includes(lastSelectedIdRef.current)) {
         const entry = (changes.updated as any)[lastSelectedIdRef.current]
         if (entry) {
           const [oldShape, newShape] = entry
           if (oldShape.props !== newShape.props) {
-            setSelectedCard({ id: newShape.id, props: newShape.props })
+            setPinnedCard({ id: newShape.id, props: newShape.props })
           }
         }
       }
@@ -376,7 +378,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
   const updateCard = useCallback((id: string, props: Partial<SelectedCard['props']>) => {
     if (!editor) return
     editor.updateShape({ id, type: 'paper-card', props } as any)
-    setSelectedCard(prev => prev && prev.id === id ? { ...prev, props: { ...prev.props, ...props } } : prev)
+    setPinnedCard(prev => prev && prev.id === id ? { ...prev, props: { ...prev.props, ...props } } : prev)
   }, [editor])
 
   return (
@@ -419,19 +421,19 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         zIndex: 200,
         display: 'flex',
         flexDirection: 'column',
-        transform: selectedCard ? 'translateX(0)' : 'translateX(100%)',
+        transform: pinnedCard ? 'translateX(0)' : 'translateX(100%)',
         transition: 'transform 0.22s cubic-bezier(0.4,0,0.2,1)',
-        pointerEvents: selectedCard ? 'all' : 'none',
+        pointerEvents: pinnedCard ? 'all' : 'none',
       }}>
-        {selectedCard && (
+        {pinnedCard && (
           <DetailPanel
-            card={selectedCard}
-            onUpdate={(props) => updateCard(selectedCard.id, props)}
-            onClose={() => editor?.selectNone()}
+            card={pinnedCard}
+            onUpdate={(props) => updateCard(pinnedCard.id, props)}
+            onClose={() => { editor?.selectNone(); setPinnedCard(null) }}
             onOpenPdf={() => setPdfOpen({
-              itemKey: selectedCard.props.itemKey,
-              pdfKey: selectedCard.props.pdfKey,
-              title: selectedCard.props.title,
+              itemKey: pinnedCard.props.itemKey,
+              pdfKey: pinnedCard.props.pdfKey,
+              title: pinnedCard.props.title,
             })}
             userId={userId}
             apiKey={apiKey}

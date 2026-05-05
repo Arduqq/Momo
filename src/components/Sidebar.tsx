@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { ZoteroClient, extractCiteKey } from '../api/zotero';
 import type { ZoteroItem, ZoteroSort } from '../api/zotero';
-import { Search, Loader2, Book, EyeOff, RotateCcw, ChevronDown, ChevronUp, ExternalLink, FileX, FolderOpen } from 'lucide-react';
+import { Search, Book, EyeOff, RotateCcw, ChevronDown, ChevronUp, ExternalLink, FileX, FolderOpen } from 'lucide-react';
 
 const PAGE_SIZE = 25;
 
@@ -39,12 +39,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
   const [hiddenItems, setHiddenItems] = useState<HiddenItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<ZoteroSort>('dateModified');
   const [view, setView] = useState<'library' | 'hidden'>('library');
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const startRef = useRef(0);
   const sentinelRef = useRef<HTMLDivElement>(null);
+
+  const [showSpinner, setShowSpinner] = useState(false);
+
+  // Delay showing the spinner to avoid flicker on fast loads
+  useEffect(() => {
+    if (!loading) { setShowSpinner(false); return; }
+    const t = setTimeout(() => setShowSpinner(true), 200);
+    return () => clearTimeout(t);
+  }, [loading]);
+
+  const refresh = useCallback(() => {
+    if (!loading) setRefreshTick(t => t + 1);
+  }, [loading]);
 
   const client = useMemo(() => new ZoteroClient(userId, apiKey), [userId, apiKey]);
 
@@ -73,12 +88,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
     setExpandedKey(null);
   }, [workspaceId]);
 
-  // Initial fetch / reset when query, sort, or credentials change
+  // Initial fetch / reset when query, sort, credentials, or manual refresh changes
   useEffect(() => {
     if (!userId || !apiKey) return;
     startRef.current = 0;
     setItems([]);
     setHasMore(false);
+    setError(false);
     let cancelled = false;
     setLoading(true);
 
@@ -91,14 +107,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
           setHasMore(newItems.length < total);
         }
       } catch {
-        // error already logged in client
+        if (!cancelled) setError(true);
       } finally {
         if (!cancelled) setLoading(false);
       }
     }, 400);
 
     return () => { cancelled = true; clearTimeout(timer); setLoading(false); };
-  }, [query, sort, userId, apiKey, client]);
+  }, [query, sort, userId, apiKey, client, refreshTick]);
 
   // Load next page
   const loadMore = useCallback(async () => {
@@ -183,7 +199,29 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
     }}>
       {/* Header — paddingTop clears macOS traffic-light buttons */}
       <div style={{ padding: '52px 14px 0', borderBottom: '1px solid #eee', display: 'flex', flexDirection: 'column', gap: 8, WebkitAppRegion: 'drag' } as React.CSSProperties}>
-        <span style={{ fontSize: 15, fontWeight: 700, color: '#111', WebkitAppRegion: 'no-drag' } as React.CSSProperties}>Zotero Library</span>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: '#111' }}>Zotero Library</span>
+          {view === 'library' && (
+            <button
+              onClick={refresh}
+              disabled={loading}
+              title="Refresh library"
+              style={{
+                border: 'none', background: 'none', cursor: loading ? 'default' : 'pointer',
+                color: loading ? '#c4c9d4' : '#9ca3af', padding: 4,
+                display: 'flex', alignItems: 'center', borderRadius: 5,
+                transition: 'color 0.15s',
+              }}
+              onMouseEnter={e => { if (!loading) (e.currentTarget as HTMLButtonElement).style.color = '#6366f1' }}
+              onMouseLeave={e => { if (!loading) (e.currentTarget as HTMLButtonElement).style.color = '#9ca3af' }}
+            >
+              {loading
+                ? <div style={{ width: 13, height: 13, borderRadius: '50%', border: '1.5px solid #e5e7eb', borderTopColor: '#9ca3af', animation: 'spin 0.7s linear infinite' }} />
+                : <RotateCcw size={13} />
+              }
+            </button>
+          )}
+        </div>
 
         {/* Library / Hidden tabs */}
         <div style={{ display: 'flex', backgroundColor: '#f3f4f6', borderRadius: 7, padding: 2, gap: 2, WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
@@ -249,9 +287,35 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
       <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
         {view === 'library' ? (
           <>
-            {loading ? (
-              <div style={{ display: 'flex', justifyContent: 'center', padding: 24 }}>
-                <Loader2 className="animate-spin" size={20} color="#bbb" />
+            {loading && showSpinner ? (
+              <div style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 12, padding: '48px 16px',
+              }}>
+                <div style={{
+                  width: 22, height: 22, borderRadius: '50%',
+                  border: '2.5px solid #e5e7eb', borderTopColor: '#6366f1',
+                  animation: 'spin 0.7s linear infinite', flexShrink: 0,
+                }} />
+                <span style={{ fontSize: 12, color: '#9ca3af', textAlign: 'center', lineHeight: 1.5 }}>
+                  {query ? `Searching…` : 'Loading library…'}
+                </span>
+              </div>
+            ) : !loading && error ? (
+              <div style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 12, padding: '48px 16px',
+              }}>
+                <span style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', lineHeight: 1.6 }}>
+                  Could not reach Zotero.<br />Check your credentials or connection.
+                </span>
+                <button onClick={refresh} style={{
+                  border: '1px solid #e5e7eb', backgroundColor: '#fff', borderRadius: 7,
+                  padding: '5px 14px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                  color: '#374151', fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                  <RotateCcw size={11} /> Try again
+                </button>
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -276,7 +340,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
                 <div ref={sentinelRef} style={{ height: 1 }} />
                 {loadingMore && (
                   <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0' }}>
-                    <Loader2 className="animate-spin" size={16} color="#bbb" />
+                    <div style={{
+                      width: 16, height: 16, borderRadius: '50%',
+                      border: '2px solid #e5e7eb', borderTopColor: '#9ca3af',
+                      animation: 'spin 0.7s linear infinite',
+                    }} />
                   </div>
                 )}
               </div>

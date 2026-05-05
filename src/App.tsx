@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { Sidebar } from './components/Sidebar'
-import { Canvas } from './components/Canvas'
+const Canvas = lazy(() => import('./components/Canvas').then(m => ({ default: m.Canvas })))
 import { Settings } from './components/Settings'
 import { Settings as SettingsIcon, Layers, Plus, X, Download, ArrowDownCircle, CheckCircle2 } from 'lucide-react'
 
@@ -22,6 +22,8 @@ function App() {
     setCrossPageItems(cross)
   }, [])
   const [currentVersion, setCurrentVersion] = useState('')
+  const [appReady, setAppReady] = useState(false)
+  const [loadingVisible, setLoadingVisible] = useState(true)
   const [updateState, setUpdateState] = useState<{
     phase: 'idle' | 'available' | 'downloading' | 'ready';
     version: string; releaseNotes: string; percent: number; dismissed: boolean;
@@ -66,9 +68,16 @@ function App() {
   }
 
   useEffect(() => {
-    loadSettings()
-    loadWorkspaces()
-    window.ipcRenderer.invoke('get-app-version').then((v: string) => setCurrentVersion(v || ''))
+    // Preload tldraw chunk in parallel with data loading
+    import('./components/Canvas')
+    Promise.all([
+      loadSettings(),
+      loadWorkspaces(),
+      window.ipcRenderer.invoke('get-app-version').then((v: string) => setCurrentVersion(v || '')),
+    ]).then(() => {
+      setAppReady(true)
+      setTimeout(() => setLoadingVisible(false), 380)
+    })
     window.ipcRenderer.on('update-available', (_e: any, info: { version: string; releaseNotes: string }) => {
       setUpdateState(s => ({ ...s, phase: 'available', version: info.version, releaseNotes: info.releaseNotes, dismissed: false }))
     })
@@ -82,6 +91,7 @@ function App() {
 
   return (
     <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif' }}>
+      {loadingVisible && <LoadingScreen fading={appReady} />}
       <Sidebar userId={userId} apiKey={apiKey} workspaceId={activeWorkspaceId} placedItemKeys={placedItemKeys} crossPageItems={crossPageItems} />
 
       <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0 }}>
@@ -151,7 +161,9 @@ function App() {
           </button>
         </header>
 
-        <Canvas workspaceId={activeWorkspaceId} userId={userId} apiKey={apiKey} onPlacedKeysChange={handlePlacedKeysChange} />
+        <Suspense fallback={null}>
+          <Canvas workspaceId={activeWorkspaceId} userId={userId} apiKey={apiKey} onPlacedKeysChange={handlePlacedKeysChange} />
+        </Suspense>
       </main>
 
       {showSettings && (
@@ -349,6 +361,45 @@ function WorkspaceTabs({ workspaces, activeId, onSelect, onCreate, onDelete, onR
         </button>
       )}
     </div>
+  )
+}
+
+// ─── LoadingScreen ────────────────────────────────────────────────────────────
+
+function LoadingScreen({ fading }: { fading: boolean }) {
+  return (
+    <>
+      <style>{`
+        @keyframes momo-pulse {
+          0%, 80%, 100% { opacity: 0.2; transform: scale(0.7); }
+          40% { opacity: 1; transform: scale(1); }
+        }
+      `}</style>
+      <div style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        backgroundColor: '#0f0f17',
+        display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center',
+        gap: 0,
+        opacity: fading ? 0 : 1,
+        transition: 'opacity 0.35s ease',
+        pointerEvents: fading ? 'none' : 'all',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      }}>
+        <div style={{ fontWeight: 800, fontSize: 42, color: '#fff', letterSpacing: '-0.03em', lineHeight: 1 }}>
+          Momo
+        </div>
+        <div style={{ marginTop: 36, display: 'flex', gap: 8 }}>
+          {[0, 1, 2].map(i => (
+            <div key={i} style={{
+              width: 7, height: 7, borderRadius: '50%',
+              backgroundColor: '#6366f1',
+              animation: `momo-pulse 1.4s ease-in-out ${i * 0.2}s infinite`,
+            }} />
+          ))}
+        </div>
+      </div>
+    </>
   )
 }
 

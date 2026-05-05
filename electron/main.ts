@@ -201,6 +201,7 @@ function createWindow() {
 
   if (process.env.VITE_DEV_SERVER_URL) {
     win.loadURL(process.env.VITE_DEV_SERVER_URL)
+    win.webContents.openDevTools({ mode: 'detach' })
   } else {
     // win.loadFile('dist/index.html')
     win.loadFile(path.join(process.env.DIST as string, 'index.html'))
