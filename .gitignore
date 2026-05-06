@@ -20,6 +20,7 @@ release
 tsconfig.tsbuildinfo
 vite.config.d.ts
 src/**/*.d.ts
+!src/vite-env.d.ts
 src/**/*.js
 
 # Intermediate icon assets (keep build/icon.icns, exclude the working folder)
