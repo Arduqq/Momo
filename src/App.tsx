@@ -24,6 +24,7 @@ function App() {
   const [currentVersion, setCurrentVersion] = useState('')
   const [appReady, setAppReady] = useState(false)
   const [loadingVisible, setLoadingVisible] = useState(true)
+  const [showUpdatePermission, setShowUpdatePermission] = useState(false)
   const [updateState, setUpdateState] = useState<{
     phase: 'idle' | 'available' | 'downloading' | 'ready';
     version: string; releaseNotes: string; percent: number; dismissed: boolean;
@@ -78,6 +79,7 @@ function App() {
       setAppReady(true)
       setTimeout(() => setLoadingVisible(false), 380)
     })
+    window.ipcRenderer.on('ask-update-permission', () => setShowUpdatePermission(true))
     window.ipcRenderer.on('update-available', (_e: any, info: { version: string; releaseNotes: string }) => {
       setUpdateState(s => ({ ...s, phase: 'available', version: info.version, releaseNotes: info.releaseNotes, dismissed: false }))
     })
@@ -168,6 +170,18 @@ function App() {
 
       {showSettings && (
         <Settings onClose={() => { setShowSettings(false); loadSettings() }} />
+      )}
+      {showUpdatePermission && (
+        <UpdatePermissionModal
+          onAllow={() => {
+            setShowUpdatePermission(false)
+            window.ipcRenderer.invoke('set-update-permission', true)
+          }}
+          onDecline={() => {
+            setShowUpdatePermission(false)
+            window.ipcRenderer.invoke('set-update-permission', false)
+          }}
+        />
       )}
     </div>
   )
@@ -360,6 +374,75 @@ function WorkspaceTabs({ workspaces, activeId, onSelect, onCreate, onDelete, onR
           <Plus size={14} />
         </button>
       )}
+    </div>
+  )
+}
+
+// ─── UpdatePermissionModal ────────────────────────────────────────────────────
+
+function UpdatePermissionModal({ onAllow, onDecline }: { onAllow: () => void; onDecline: () => void }) {
+  const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 1000,
+      backgroundColor: 'rgba(0,0,0,0.35)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontFamily: font,
+    }}>
+      <div style={{
+        backgroundColor: '#fff', borderRadius: 14,
+        boxShadow: '0 24px 64px rgba(0,0,0,0.18)',
+        width: 380, maxWidth: 'calc(100vw - 40px)',
+        overflow: 'hidden',
+      }}>
+        <div style={{ padding: '28px 28px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, textAlign: 'center' }}>
+          <div style={{
+            width: 52, height: 52, borderRadius: 14,
+            backgroundColor: '#eef2ff',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Download size={24} color="#6366f1" />
+          </div>
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 16, color: '#111', marginBottom: 8 }}>
+              Automatic Updates
+            </div>
+            <div style={{ fontSize: 13, color: '#6b7280', lineHeight: 1.6 }}>
+              Would you like Momo to automatically check for updates?
+              You'll be notified when a new version is available — no downloads happen without your confirmation.
+            </div>
+          </div>
+        </div>
+        <div style={{
+          padding: '0 28px 24px',
+          display: 'flex', flexDirection: 'column', gap: 8,
+        }}>
+          <button
+            onClick={onAllow}
+            style={{
+              border: 'none', backgroundColor: '#6366f1', color: '#fff',
+              borderRadius: 9, padding: '10px 0', fontSize: 14, fontWeight: 600,
+              cursor: 'pointer', fontFamily: font, width: '100%',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#4f46e5')}
+            onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#6366f1')}
+          >
+            Check Automatically
+          </button>
+          <button
+            onClick={onDecline}
+            style={{
+              border: '1px solid #e5e7eb', backgroundColor: '#fff', color: '#374151',
+              borderRadius: 9, padding: '10px 0', fontSize: 14, fontWeight: 500,
+              cursor: 'pointer', fontFamily: font, width: '100%',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f9fafb')}
+            onMouseLeave={e => (e.currentTarget.style.backgroundColor = '#fff')}
+          >
+            Not Now
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

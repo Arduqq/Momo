@@ -108,9 +108,14 @@ ipcMain.handle('open-external', (_event, url: string) => {
   shell.openExternal(url)
 })
 
+function zoteroStorageDir(attachmentKey: string) {
+  // Zotero stores files in ~/Zotero/storage on both macOS and Windows
+  return path.join(os.homedir(), 'Zotero', 'storage', attachmentKey)
+}
+
 ipcMain.handle('check-pdf-exists', (_event, attachmentKey: string) => {
   try {
-    const dir = path.join(os.homedir(), 'Zotero', 'storage', attachmentKey)
+    const dir = zoteroStorageDir(attachmentKey)
     if (!fs.existsSync(dir)) return { exists: false }
     const pdf = fs.readdirSync(dir).find(f => f.toLowerCase().endsWith('.pdf'))
     return { exists: !!pdf }
@@ -128,7 +133,7 @@ ipcMain.handle('locate-pdf', async (_event, attachmentKey: string) => {
   if (result.canceled || result.filePaths.length === 0) return false
   try {
     const src = result.filePaths[0]
-    const destDir = path.join(os.homedir(), 'Zotero', 'storage', attachmentKey)
+    const destDir = zoteroStorageDir(attachmentKey)
     fs.mkdirSync(destDir, { recursive: true })
     fs.copyFileSync(src, path.join(destDir, path.basename(src)))
     return true
@@ -169,7 +174,7 @@ ipcMain.handle('read-image-file', (_event, filePath: string) => {
 
 ipcMain.handle('read-zotero-pdf', (_event, attachmentKey: string) => {
   try {
-    const dir = path.join(os.homedir(), 'Zotero', 'storage', attachmentKey)
+    const dir = zoteroStorageDir(attachmentKey)
     const files = fs.readdirSync(dir)
     const pdf = files.find(f => f.toLowerCase().endsWith('.pdf'))
     if (!pdf) return null
@@ -191,7 +196,7 @@ function createWindow() {
     },
     width: 1200,
     height: 800,
-    titleBarStyle: 'hiddenInset', // Better for macOS
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
   })
 
   // Test active push message to Renderer-process.
@@ -238,6 +243,16 @@ ipcMain.handle('check-for-updates', () => {
 
 ipcMain.handle('get-app-version', () => app.getVersion())
 
+ipcMain.handle('get-update-permission', () => {
+  const val = store.get('auto-update-permission', null)
+  return val  // null = never asked, true = allowed, false = declined
+})
+
+ipcMain.handle('set-update-permission', (_event, allowed: boolean) => {
+  store.set('auto-update-permission', allowed)
+  if (allowed && app.isPackaged) autoUpdater.checkForUpdates()
+})
+
 // Cache update info in case it arrives before the renderer is ready
 let pendingUpdateInfo: { version: string; releaseNotes: string } | null = null
 
@@ -275,15 +290,20 @@ app.whenReady().then(() => {
 
   if (app.isPackaged) {
     setupAutoUpdater()
-    // Wait for renderer to finish loading before checking, so the
-    // update-available payload is never lost to a race condition.
     win?.webContents.on('did-finish-load', () => {
       if (pendingUpdateInfo) {
         win?.webContents.send('update-available', pendingUpdateInfo)
         pendingUpdateInfo = null
-      } else {
+        return
+      }
+      const permission = store.get('auto-update-permission', null)
+      if (permission === null) {
+        // First launch — ask the user for permission
+        win?.webContents.send('ask-update-permission')
+      } else if (permission === true) {
         setTimeout(() => autoUpdater.checkForUpdates(), 2000)
       }
+      // false = user declined, do nothing
     })
   }
 })

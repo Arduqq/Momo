@@ -9,7 +9,9 @@
     "build:electron": "tsc -p tsconfig.electron.json && cp electron/preload.cjs dist-electron/",
     "build": "npm run build:electron && tsc -p tsconfig.app.json && vite build",
     "dist:mac": "npm run build && electron-builder --mac --publish never",
+    "dist:win": "npm run build && electron-builder --win --publish never",
     "release:mac": "npm run build && electron-builder --mac --publish always",
+    "release:win": "npm run build && electron-builder --win --publish always",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -40,6 +42,20 @@
         }
       ],
       "darkModeSupport": true
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
     },
     "publish": {
       "provider": "github",

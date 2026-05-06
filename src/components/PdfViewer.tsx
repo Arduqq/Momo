@@ -62,6 +62,7 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
   const [error, setError] = useState('')
   const [popover, setPopover] = useState<PopoverState | null>(null)
   const resolvedPdfKey = useRef(initialPdfKey)
+  const pdfRef = useRef<PDFDocumentProxy | null>(null)
   const zotero = useMemo(() => new ZoteroClient(userId, apiKey), [userId, apiKey])
 
   useEffect(() => {
@@ -82,7 +83,13 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
         if (cancelled) return
         if (!pdfData) { setError('PDF file not found in local Zotero storage.'); setLoading(false); return }
         const doc = await pdfjs.getDocument({ data: pdfData }).promise
-        if (!cancelled) { setPdf(doc); setAnnotations(rawAnnotations.filter(Boolean).map(toAnnotation)) }
+        if (!cancelled) {
+          pdfRef.current = doc
+          setPdf(doc)
+          setAnnotations(rawAnnotations.filter(Boolean).map(toAnnotation))
+        } else {
+          doc.destroy()
+        }
       } catch (e: any) {
         if (!cancelled) setError(e?.message || 'Failed to load PDF.')
       } finally {
@@ -90,7 +97,13 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
       }
     }
     load()
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      // Destroy the PDF document to release PDF.js worker memory and GPU resources.
+      // Without this, canvas memory accumulates across open/close cycles.
+      pdfRef.current?.destroy()
+      pdfRef.current = null
+    }
   }, [itemKey, initialPdfKey, zotero])
 
   useEffect(() => {
@@ -240,7 +253,13 @@ function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }
       if (!cancelled) setViewport(vp)
     }
     render().catch(e => console.warn(`[PdfPage ${pageIndex + 1}]`, e))
-    return () => { cancelled = true; textLayerInstance.current?.cancel() }
+    return () => {
+      cancelled = true
+      textLayerInstance.current?.cancel()
+      // Set canvas dimensions to 0 to immediately release the GPU texture memory.
+      const canvas = canvasRef.current
+      if (canvas) { canvas.width = 0; canvas.height = 0 }
+    }
   }, [pdf, pageIndex])
 
   const onPointerDown = (e: React.PointerEvent) => {
