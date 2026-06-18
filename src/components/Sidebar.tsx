@@ -147,7 +147,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
     [items, hiddenKeySet, placedItemKeys]
   );
 
-  const hideItem = async (item: ZoteroItem) => {
+  const restoreItem = async (key: string) => {
+    if (!workspaceId) return;
+    await window.ipcRenderer.invoke('remove-hidden-item', workspaceId, key);
+    setHiddenItems(prev => prev.filter(h => h.key !== key));
+    setExpandedKey(null);
+  };
+
+  const handleToggle = useCallback((key: string) => {
+    setExpandedKey(prev => prev === key ? null : key);
+  }, []);
+
+  const handleHide = useCallback(async (item: ZoteroItem) => {
     if (!workspaceId) return;
     const h: HiddenItem = {
       key: item.key,
@@ -160,16 +171,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
     await window.ipcRenderer.invoke('add-hidden-item', workspaceId, h);
     setHiddenItems(prev => [...prev, h]);
     setExpandedKey(null);
-  };
+  }, [workspaceId]);
 
-  const restoreItem = async (key: string) => {
-    if (!workspaceId) return;
-    await window.ipcRenderer.invoke('remove-hidden-item', workspaceId, key);
-    setHiddenItems(prev => prev.filter(h => h.key !== key));
-    setExpandedKey(null);
-  };
-
-  const onDragStart = (e: React.DragEvent, item: ZoteroItem) => {
+  const handleDragStart = useCallback((e: React.DragEvent, item: ZoteroItem) => {
     const isStandaloneAttachment = item.data.itemType === 'attachment' && item.data.contentType === 'application/pdf';
     const authors = item.data.creators?.map(c => c.lastName || c.name).filter(Boolean).join(', ') || '';
     const displayTitle = item.data.title?.trim() || item.data.filename || '';
@@ -182,7 +186,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
         venue: extractVenue(item),
         contribution: '', relationship: '',
         abstract: item.data.abstractNote || '',
-        // For standalone attachments the item key IS the pdf key
         itemKey: isStandaloneAttachment ? '' : item.key,
         pdfKey: isStandaloneAttachment ? item.key : '',
         thumbnail: '', read: false,
@@ -190,7 +193,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
       }
     };
     e.dataTransfer.setData('application/momo-paper', JSON.stringify(dragData));
-  };
+  }, []);
 
   return (
     <div style={{
@@ -323,9 +326,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
                   <LibraryCard
                     key={item.key} item={item}
                     expanded={expandedKey === item.key}
-                    onToggle={() => setExpandedKey(expandedKey === item.key ? null : item.key)}
-                    onHide={() => hideItem(item)}
-                    onDragStart={e => onDragStart(e, item)}
+                    onToggle={handleToggle}
+                    onHide={handleHide}
+                    onDragStart={handleDragStart}
                     workspaceId={workspaceId}
                     checkPdf={checkPdf}
                     pageNames={crossPageItems.get(item.key)}
@@ -375,16 +378,25 @@ export const Sidebar: React.FC<SidebarProps> = ({ userId, apiKey, workspaceId, p
 
 // ─── LibraryCard ──────────────────────────────────────────────────────────────
 
+function arraysEqual(a?: string[], b?: string[]): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+
 interface PdfStatus { loading: boolean; attachmentKey: string; exists: boolean }
 
-function LibraryCard({ item, expanded, onToggle, onHide, onDragStart, workspaceId, checkPdf, pageNames }: {
+interface LibraryCardProps {
   item: ZoteroItem; expanded: boolean;
-  onToggle: () => void; onHide: () => void;
-  onDragStart: (e: React.DragEvent) => void;
+  onToggle: (key: string) => void;
+  onHide: (item: ZoteroItem) => void;
+  onDragStart: (e: React.DragEvent, item: ZoteroItem) => void;
   workspaceId: string | null;
   checkPdf: (item: ZoteroItem) => Promise<{ attachmentKey: string; exists: boolean }>;
   pageNames?: string[];
-}) {
+}
+
+const LibraryCard = React.memo(function LibraryCard({ item, expanded, onToggle, onHide, onDragStart, workspaceId, checkPdf, pageNames }: LibraryCardProps) {
   const year = extractYear(item.data.date);
   const venue = extractVenue(item);
   const authors = item.data.creators?.map(c => c.lastName || c.name).filter(Boolean).join(', ') || '';
@@ -410,7 +422,7 @@ function LibraryCard({ item, expanded, onToggle, onHide, onDragStart, workspaceI
     }}
       onMouseEnter={e => (e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)')}
       onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}>
-      <div draggable onDragStart={onDragStart} onClick={onToggle}
+      <div draggable onDragStart={e => onDragStart(e, item)} onClick={() => onToggle(item.key)}
         style={{ padding: '9px 10px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2, userSelect: 'none' }}>
         <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
           <Book size={12} style={{ marginTop: 3, flexShrink: 0, color: '#c4c9d4' }} />
@@ -488,7 +500,7 @@ function LibraryCard({ item, expanded, onToggle, onHide, onDragStart, workspaceI
               Open in Zotero
             </button>
             {workspaceId && (
-              <button onClick={e => { e.stopPropagation(); onHide(); }} style={actionBtn('#fff5f5', '#dc2626', '#fca5a5')}>
+              <button onClick={e => { e.stopPropagation(); onHide(item); }} style={actionBtn('#fff5f5', '#dc2626', '#fca5a5')}>
                 <EyeOff size={11} />
                 Hide from workspace
               </button>
@@ -498,7 +510,16 @@ function LibraryCard({ item, expanded, onToggle, onHide, onDragStart, workspaceI
       )}
     </div>
   );
-}
+}, (prev, next) => (
+  prev.item === next.item &&
+  prev.expanded === next.expanded &&
+  prev.onToggle === next.onToggle &&
+  prev.onHide === next.onHide &&
+  prev.onDragStart === next.onDragStart &&
+  prev.workspaceId === next.workspaceId &&
+  prev.checkPdf === next.checkPdf &&
+  arraysEqual(prev.pageNames, next.pageNames)
+));
 
 // ─── HiddenCard ───────────────────────────────────────────────────────────────
 

@@ -18,7 +18,10 @@ function App() {
   const [placedItemKeys, setPlacedItemKeys] = useState<Set<string>>(new Set())
   const [crossPageItems, setCrossPageItems] = useState<Map<string, string[]>>(new Map())
   const handlePlacedKeysChange = useCallback((keys: Set<string>, cross: Map<string, string[]>) => {
-    setPlacedItemKeys(keys)
+    setPlacedItemKeys(prev => {
+      if (prev.size === keys.size && [...keys].every(k => prev.has(k))) return prev
+      return keys
+    })
     setCrossPageItems(cross)
   }, [])
   const [currentVersion, setCurrentVersion] = useState('')

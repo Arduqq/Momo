@@ -27,13 +27,19 @@ export async function generateThumbnail(
     const page = await pdf.getPage(1);
     const viewport = page.getViewport({ scale: 0.4 });
 
-    const canvas = document.createElement('canvas');
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
+    const offscreen = new OffscreenCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+    await page.render({ canvasContext: offscreen.getContext('2d') as any, viewport, canvas: offscreen as any }).promise;
 
-    await page.render({ canvasContext: canvas.getContext('2d')!, viewport, canvas }).promise;
+    const blob = await offscreen.convertToBlob({ type: 'image/jpeg', quality: 0.75 });
+    if (!blob) return { thumbnail: '', pdfKey };
+    const thumbnail = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
 
-    return { thumbnail: canvas.toDataURL('image/jpeg', 0.75), pdfKey };
+    return { thumbnail, pdfKey };
   } catch (e) {
     console.warn('[PDF] thumbnail generation failed:', e);
     return { thumbnail: '', pdfKey: '' };
