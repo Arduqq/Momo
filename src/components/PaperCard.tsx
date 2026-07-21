@@ -48,7 +48,7 @@ function PaperCardInner({ shape }: { shape: any }) {
         pointerEvents: 'all',
         width: CARD_W,
         height: CARD_H,
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontFamily: "var(--momo-font, 'Inter', -apple-system, BlinkMacSystemFont, sans-serif)",
         backgroundColor: '#fff',
         borderRadius: '10px',
         border: read ? '1.5px solid #6366f1' : '1px solid #e5e7eb',
