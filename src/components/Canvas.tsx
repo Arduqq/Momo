@@ -161,6 +161,28 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
     await window.ipcRenderer.invoke('set-store-value', 'global-font', fontName)
   }, [])
 
+  const [strokeExtra, setStrokeExtra] = useState(0)
+
+  useEffect(() => {
+    window.ipcRenderer.invoke('get-store-value', 'global-stroke-extra').then((v: number | null) => {
+      setStrokeExtra(v ?? 0)
+    })
+  }, [])
+
+  const saveStrokeExtra = useCallback(async (v: number) => {
+    setStrokeExtra(v)
+    await window.ipcRenderer.invoke('set-store-value', 'global-stroke-extra', v)
+  }, [])
+
+  const applyTheme = useCallback(async (theme: typeof THEMES[number]) => {
+    const newBg: BackgroundConfig = {
+      ...DEFAULT_BG, ...theme.bg, imageDataUrl: '', imageMode: 'fill'
+    }
+    await saveBackground(newBg)
+    setIsDarkMode(theme.dark)
+    await window.ipcRenderer.invoke('set-store-value', 'global-dark-mode', theme.dark)
+  }, [saveBackground])
+
   // Track selected paper-card + placed keys
   useEffect(() => {
     if (!editor) return
@@ -705,17 +727,34 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         )}
       </div>
 
+      {/* Stroke weight filter — injected only when extra > 0 */}
+      {strokeExtra > 0 && <>
+        <svg width="0" height="0" aria-hidden style={{ position: 'absolute', pointerEvents: 'none' }}>
+          <defs>
+            <filter id="momo-stroke-thicken" x="-20%" y="-20%" width="140%" height="140%">
+              <feMorphology operator="dilate" radius={strokeExtra} in="SourceGraphic" result="dilated" />
+            </filter>
+          </defs>
+        </svg>
+        <style>{`.tl-svg-container { filter: url(#momo-stroke-thicken); }`}</style>
+      </>}
+
       {/* Customize panel (font + background) */}
       {showCustomizePanel && (
         <CustomizePanel
           font={font}
           onFontChange={saveFont}
+          isDarkMode={isDarkMode}
+          onThemeSelect={applyTheme}
           background={background}
-          onColorChange={color => saveBackground({ ...background, type: 'color', color })}
+          onColorChange={color => saveBackground({ ...background, type: 'color', color, gradient: '' })}
           onPickImage={pickBgImage}
           onModeChange={mode => saveBackground({ ...background, imageMode: mode })}
-          onSwitchToColor={() => saveBackground({ ...background, type: 'color' })}
+          onSwitchToColor={() => saveBackground({ ...background, type: 'color', gradient: '' })}
+          onGradientChange={g => saveBackground({ ...background, type: 'gradient', gradient: g, color: '', imageDataUrl: '', imageMode: 'fill' })}
           onClose={() => setShowCustomizePanel(false)}
+          strokeExtra={strokeExtra}
+          onStrokeExtraChange={saveStrokeExtra}
         />
       )}
       <button
@@ -1139,15 +1178,20 @@ function PanelField({ label, placeholder, value, onChange }: {
 
 // ─── CustomizePanel ───────────────────────────────────────────────────────────
 
-function CustomizePanel({ font, onFontChange, background, onColorChange, onPickImage, onModeChange, onSwitchToColor, onClose }: {
+function CustomizePanel({ font, onFontChange, isDarkMode: _isDarkMode, onThemeSelect, background, onColorChange, onPickImage, onModeChange, onSwitchToColor, onGradientChange, onClose, strokeExtra, onStrokeExtraChange }: {
   font: string;
   onFontChange: (f: string) => void;
+  isDarkMode: boolean;
+  onThemeSelect: (t: typeof THEMES[number]) => void;
   background: BackgroundConfig;
   onColorChange: (color: string) => void;
   onPickImage: () => void;
   onModeChange: (mode: 'fill' | 'tile') => void;
   onSwitchToColor: () => void;
+  onGradientChange: (gradient: string) => void;
   onClose: () => void;
+  strokeExtra: number;
+  onStrokeExtraChange: (v: number) => void;
 }) {
   const uiFont = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
   return (
@@ -1168,6 +1212,31 @@ function CustomizePanel({ font, onFontChange, background, onColorChange, onPickI
         </div>
 
         <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+          {/* ── Theme ── */}
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Theme</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {THEMES.map(t => {
+                const isActive = background.type === t.bg.type &&
+                  (t.bg.type === 'gradient' ? background.gradient === t.bg.gradient : background.color === t.bg.color)
+                return (
+                  <button key={t.label} onClick={() => onThemeSelect(t)} style={{
+                    flex: 1, border: isActive ? '1.5px solid #6366f1' : '1.5px solid #e5e7eb',
+                    borderRadius: 7, padding: '5px 0', fontSize: 11.5,
+                    fontWeight: isActive ? 600 : 400, cursor: 'pointer',
+                    backgroundColor: isActive ? '#eef2ff' : '#fff',
+                    color: isActive ? '#4f46e5' : '#6b7280',
+                    fontFamily: 'inherit',
+                  }}>
+                    {t.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div style={{ borderTop: '1px solid #f3f4f6', margin: '0 -14px' }} />
 
           {/* ── Font ── */}
           <div>
@@ -1194,6 +1263,18 @@ function CustomizePanel({ font, onFontChange, background, onColorChange, onPickI
           <div>
             <div style={{ fontSize: 10.5, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Background</div>
 
+            {/* Gradient swatches */}
+            <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
+              {GRADIENT_PRESETS.map(g => (
+                <button key={g.label} onClick={() => onGradientChange(g.value)} title={g.label} style={{
+                  width: 32, height: 32, borderRadius: 7, border: background.gradient === g.value ? '2px solid #6366f1' : '1.5px solid #e5e7eb',
+                  backgroundImage: g.value, cursor: 'pointer', padding: 0, flexShrink: 0,
+                  boxShadow: background.gradient === g.value ? '0 0 0 2px #c7d2fe' : 'none',
+                  transition: 'box-shadow 0.15s',
+                }} />
+              ))}
+            </div>
+
             {/* Type toggle */}
             <div style={{ display: 'flex', backgroundColor: '#f3f4f6', borderRadius: 7, padding: 2, gap: 2, marginBottom: 12 }}>
               {(['color', 'image'] as const).map(t => (
@@ -1211,7 +1292,7 @@ function CustomizePanel({ font, onFontChange, background, onColorChange, onPickI
               ))}
             </div>
 
-            {background.type === 'color' ? (
+            {background.type === 'color' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   {BG_PRESETS.map(c => (
@@ -1237,7 +1318,8 @@ function CustomizePanel({ font, onFontChange, background, onColorChange, onPickI
                   <span style={{ fontSize: 12, color: '#374151', fontFamily: 'monospace' }}>{background.color}</span>
                 </label>
               </div>
-            ) : (
+            )}
+            {background.type === 'image' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div style={{
                   height: 90, borderRadius: 8, border: '1.5px dashed #e5e7eb',
@@ -1281,6 +1363,27 @@ function CustomizePanel({ font, onFontChange, background, onColorChange, onPickI
                 )}
               </div>
             )}
+          </div>
+
+          <div style={{ borderTop: '1px solid #f3f4f6', margin: '0 -14px' }} />
+
+          {/* ── Stroke weight ── */}
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Stroke weight</div>
+            <div style={{ display: 'flex', gap: 5 }}>
+              {([0, 2, 4, 6] as const).map(v => (
+                <button key={v} onClick={() => onStrokeExtraChange(v)} style={{
+                  flex: 1, border: strokeExtra === v ? '1.5px solid #6366f1' : '1.5px solid #e5e7eb',
+                  borderRadius: 6, padding: '5px 0', fontSize: 11.5,
+                  fontWeight: strokeExtra === v ? 600 : 400, cursor: 'pointer',
+                  backgroundColor: strokeExtra === v ? '#eef2ff' : '#fff',
+                  color: strokeExtra === v ? '#4f46e5' : '#6b7280',
+                  fontFamily: 'inherit',
+                }}>
+                  {v === 0 ? 'Default' : `+${v}`}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
