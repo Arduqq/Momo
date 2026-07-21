@@ -80,6 +80,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
   const [background, setBackground] = useState<BackgroundConfig>(DEFAULT_BG)
   const [showCustomizePanel, setShowCustomizePanel] = useState(false)
   const [font, setFont] = useState('Inter')
+  const [isDarkMode, setIsDarkMode] = useState(true)
   const bgPathRef = useRef<string>('')
 
   const onMount = useCallback((ed: Editor) => {
@@ -126,6 +127,17 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
     })
   }, [])
 
+  useEffect(() => {
+    window.ipcRenderer.invoke('get-store-value', 'global-dark-mode').then((v: boolean | null) => {
+      setIsDarkMode(v ?? true)
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!editor) return
+    editor.user.updateUserPreferences({ colorScheme: isDarkMode ? 'dark' : 'light' })
+  }, [editor, isDarkMode])
+
   const saveFont = useCallback(async (fontName: string) => {
     setFont(fontName)
     document.documentElement.style.setProperty('--momo-font', fontName)
@@ -149,9 +161,8 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         const newId = card?.id ?? null
         if (newId !== lastSelectedIdRef.current) {
           lastSelectedIdRef.current = newId
-          // Only update the pinned panel when a card is actively selected —
-          // deselecting leaves the panel showing the last paper.
           if (card) setPinnedCard({ id: card.id, props: card.props })
+          else setPinnedCard(null)
         }
       }
 
@@ -615,7 +626,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
               backgroundPosition: 'center',
             }),
       }} />
-      <Tldraw onMount={onMount} shapeUtils={customShapeUtils} inferDarkMode components={{ Background: () => null }} />
+      <Tldraw onMount={onMount} shapeUtils={customShapeUtils} components={{ Background: () => null }} />
 
       {pdfOpen && (
         <PdfViewer
