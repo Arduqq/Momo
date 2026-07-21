@@ -615,7 +615,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
               backgroundPosition: 'center',
             }),
       }} />
-      <Tldraw onMount={onMount} shapeUtils={customShapeUtils} inferDarkMode components={{ StylePanel: null, Background: () => null }} />
+      <Tldraw onMount={onMount} shapeUtils={customShapeUtils} inferDarkMode components={{ Background: () => null }} />
 
       {pdfOpen && (
         <PdfViewer
