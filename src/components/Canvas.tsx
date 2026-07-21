@@ -42,7 +42,7 @@ const FONTS = [
   { label: 'JetBrains Mono',    value: 'JetBrains Mono' },
 ] as const
 
-export const GRADIENT_PRESETS = [
+const GRADIENT_PRESETS = [
   { label: 'Space',  value: 'linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)' },
   { label: 'Dusk',   value: 'linear-gradient(135deg, #2c3e50 0%, #4a1942 100%)' },
   { label: 'Forest', value: 'linear-gradient(135deg, #134e5e 0%, #71b280 100%)' },
@@ -51,7 +51,7 @@ export const GRADIENT_PRESETS = [
   { label: 'Slate',  value: 'linear-gradient(135deg, #1e2433 0%, #2d3748 100%)' },
 ] as const
 
-export const THEMES = [
+const THEMES = [
   { label: 'Dark',  bg: { type: 'color' as const,    color: '#1a1a2e', gradient: '' }, dark: true  },
   { label: 'Slate', bg: { type: 'gradient' as const, color: '',        gradient: 'linear-gradient(135deg, #1e2433 0%, #2d3748 100%)' }, dark: true },
   { label: 'Paper', bg: { type: 'color' as const,    color: '#faf6f0', gradient: '' }, dark: false },
@@ -178,6 +178,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
     const newBg: BackgroundConfig = {
       ...DEFAULT_BG, ...theme.bg, imageDataUrl: '', imageMode: 'fill'
     }
+    bgPathRef.current = ''
     await saveBackground(newBg)
     setIsDarkMode(theme.dark)
     await window.ipcRenderer.invoke('set-store-value', 'global-dark-mode', theme.dark)
@@ -749,7 +750,6 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         <CustomizePanel
           font={font}
           onFontChange={saveFont}
-          isDarkMode={isDarkMode}
           onThemeSelect={applyTheme}
           background={background}
           onColorChange={color => saveBackground({ ...background, type: 'color', color, gradient: '' })}
@@ -1183,10 +1183,9 @@ function PanelField({ label, placeholder, value, onChange }: {
 
 // ─── CustomizePanel ───────────────────────────────────────────────────────────
 
-function CustomizePanel({ font, onFontChange, isDarkMode: _isDarkMode, onThemeSelect, background, onColorChange, onPickImage, onModeChange, onSwitchToColor, onGradientChange, onClose, strokeExtra, onStrokeExtraChange }: {
+function CustomizePanel({ font, onFontChange, onThemeSelect, background, onColorChange, onPickImage, onModeChange, onSwitchToColor, onGradientChange, onClose, strokeExtra, onStrokeExtraChange }: {
   font: string;
   onFontChange: (f: string) => void;
-  isDarkMode: boolean;
   onThemeSelect: (t: typeof THEMES[number]) => void;
   background: BackgroundConfig;
   onColorChange: (color: string) => void;
