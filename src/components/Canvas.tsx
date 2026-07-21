@@ -7,8 +7,14 @@ import { generateThumbnail } from '../utils/pdfThumbnail'
 import { generateBibEntry, makeCiteKey, assembleBibFile } from '../utils/bibtex'
 import { ZoteroClient } from '../api/zotero'
 import type { ZoteroAnnotation } from '../api/zotero'
+import {
+  extractDoiFromPdf, fetchCrossrefMetadata,
+  parseArxivXml, detectAcademicUrl, metadataToPaperProps,
+} from '../utils/metadata'
+import { CiteWebModal } from './CiteWebModal'
+import type { WebCiteData } from './CiteWebModal'
 import TextareaAutosize from 'react-textarea-autosize'
-import { X, FileText, Download, Check, Loader2, RefreshCw, Palette, Image as ImageIcon } from 'lucide-react'
+import { X, FileText, Download, Check, Loader2, RefreshCw, Palette, Image as ImageIcon, Copy, ClipboardCheck, Link, SlidersHorizontal } from 'lucide-react'
 import { PdfViewer } from './PdfViewer'
 
 const customShapeUtils = [PaperCardShapeUtil, LinkCardShapeUtil]
@@ -23,6 +29,17 @@ interface BackgroundConfig {
 const DEFAULT_BG: BackgroundConfig = { type: 'color', color: '#1a1a2e', imageDataUrl: '', imageMode: 'fill' }
 
 const BG_PRESETS = ['#1a1a2e', '#0f172a', '#111827', '#1e1b4b', '#f8f9fa', '#ffffff']
+
+const FONTS = [
+  { label: 'Inter',             value: 'Inter' },
+  { label: 'DM Sans',           value: 'DM Sans' },
+  { label: 'Work Sans',         value: 'Work Sans' },
+  { label: 'Lora',              value: 'Lora' },
+  { label: 'Merriweather',      value: 'Merriweather' },
+  { label: 'Playfair Display',  value: 'Playfair Display' },
+  { label: 'Crimson Text',      value: 'Crimson Text' },
+  { label: 'JetBrains Mono',    value: 'JetBrains Mono' },
+] as const
 
 interface SelectedCard {
   id: string;
@@ -57,8 +74,12 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
   const lastSelectedIdRef = useRef<string | null>(null)
   const lastPageIdRef = useRef<string>('')
   const [exportState, setExportState] = useState<'idle' | 'busy' | 'done'>('idle')
+  const [copyState, setCopyState] = useState<'idle' | 'busy' | 'done'>('idle')
+  const [citeWebModal, setCiteWebModal] = useState<string | null>(null) // url or '' for blank
+  const citeWebDropPos = useRef<{ x: number; y: number } | null>(null)
   const [background, setBackground] = useState<BackgroundConfig>(DEFAULT_BG)
-  const [showBgPanel, setShowBgPanel] = useState(false)
+  const [showCustomizePanel, setShowCustomizePanel] = useState(false)
+  const [font, setFont] = useState('Inter')
   const bgPathRef = useRef<string>('')
 
   const onMount = useCallback((ed: Editor) => {
@@ -96,6 +117,20 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
     bgPathRef.current = filePath
     saveBackground({ ...background, type: 'image', imageDataUrl: dataUrl })
   }, [background, saveBackground])
+
+  useEffect(() => {
+    window.ipcRenderer.invoke('get-store-value', 'global-font').then((stored: string | null) => {
+      const f = stored ?? 'Inter'
+      setFont(f)
+      document.documentElement.style.setProperty('--momo-font', f)
+    })
+  }, [])
+
+  const saveFont = useCallback(async (fontName: string) => {
+    setFont(fontName)
+    document.documentElement.style.setProperty('--momo-font', fontName)
+    await window.ipcRenderer.invoke('set-store-value', 'global-font', fontName)
+  }, [])
 
   // Track selected paper-card + placed keys
   useEffect(() => {
@@ -242,6 +277,71 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
       } as any])
     }
 
+    const dropPdf = async (file: File, clientX: number, clientY: number) => {
+      // Placeholder card — created immediately, before any async work
+      const { x, y } = editor.screenToPage({ x: clientX, y: clientY })
+      const shapeId = createShapeId()
+      editor.createShapes([{
+        id: shapeId, type: 'paper-card', x, y,
+        props: { title: 'Importing…', authors: '', year: '', venue: '', contribution: '',
+          relationship: '', abstract: '', read: false, thumbnail: '', pdfKey: '', itemKey: '', citeKey: '' },
+      } as any])
+
+      try {
+        const buf = await file.arrayBuffer()
+        // PDF.js transfers (detaches) the typed array's buffer — pass a copy so buf stays valid for the IPC upload
+        const doi = await extractDoiFromPdf(new Uint8Array(buf.slice(0)))
+        const meta = doi ? await fetchCrossrefMetadata(doi) : null
+
+        let itemKey = ''
+        let attachmentKey = ''
+
+        if (userId && apiKey) {
+          try {
+            const zotero = new ZoteroClient(userId, apiKey)
+            const itemData: Record<string, any> = meta
+              ? {
+                  itemType: meta.itemType,
+                  title: meta.title,
+                  creators: meta.creators,
+                  date: meta.date,
+                  abstractNote: meta.abstractNote,
+                  ...(meta.DOI ? { DOI: meta.DOI } : {}),
+                  ...(meta.publicationTitle ? { publicationTitle: meta.publicationTitle } : {}),
+                  ...(meta.proceedingsTitle ? { proceedingsTitle: meta.proceedingsTitle } : {}),
+                }
+              : { itemType: 'document', title: file.name.replace(/\.pdf$/i, ''), creators: [] }
+            itemKey = await zotero.createItem(itemData)
+            attachmentKey = await zotero.createAttachment(itemKey, file.name)
+            // Send file data via IPC (file.path unavailable in sandboxed renderers)
+            await window.ipcRenderer.invoke('import-pdf', { fileData: new Uint8Array(buf), attachmentKey, filename: file.name })
+          } catch (err) {
+            console.warn('[PDF import] Zotero API error:', err)
+          }
+        }
+
+        const baseProps = meta
+          ? metadataToPaperProps(meta, itemKey)
+          : { title: file.name.replace(/\.pdf$/i, ''), authors: '', year: '', venue: '',
+              abstract: '', contribution: '', relationship: '', read: false,
+              thumbnail: '', pdfKey: '', citeKey: '', itemKey }
+
+        editor.updateShape({ id: shapeId, type: 'paper-card', props: { ...baseProps, pdfKey: attachmentKey } } as any)
+
+        // Thumbnail in background
+        if (attachmentKey) {
+          generateThumbnail(userId, apiKey, itemKey, attachmentKey)
+            .then(({ thumbnail }) => {
+              if (thumbnail) editor.updateShape({ id: shapeId, type: 'paper-card', props: { thumbnail } } as any)
+            }).catch(() => {})
+        }
+      } catch (err) {
+        console.error('[PDF import] failed:', err)
+        editor.updateShape({ id: shapeId, type: 'paper-card',
+          props: { title: file.name.replace(/\.pdf$/i, '') } } as any)
+      }
+    }
+
     const onDrop = (e: DragEvent) => {
       e.preventDefault()
       e.stopPropagation()
@@ -269,10 +369,15 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
       const files = e.dataTransfer?.files
       if (files && files.length > 0) {
         Array.from(files).forEach((file, i) => {
-          const filePath = (file as any).path as string
-          if (!filePath) return
-          const url = filePath.startsWith('file://') ? filePath : `file://${filePath}`
-          dropLinkCard(url, file.name, 'file', e.clientX + i * (LINK_W + 10), e.clientY)
+          if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
+            dropPdf(file, e.clientX + i * 20, e.clientY + i * 20)
+          } else {
+            const filePath = (file as any).path as string | undefined
+            const url = filePath
+              ? (filePath.startsWith('file://') ? filePath : `file://${filePath}`)
+              : `file://${file.name}`
+            dropLinkCard(url, file.name, 'file', e.clientX + i * (LINK_W + 10), e.clientY)
+          }
         })
         return
       }
@@ -281,12 +386,78 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
       const uriList = e.dataTransfer?.getData('text/uri-list')
       if (uriList) {
         const urls = uriList.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'))
-        urls.forEach((url, i) => {
-          try {
-            const label = new URL(url).hostname.replace(/^www\./, '')
-            dropLinkCard(url, label, 'web', e.clientX + i * (LINK_W + 10), e.clientY)
-          } catch { /* malformed URL */ }
-        })
+        if (!urls.length) return
+
+        // For academic URLs, auto-fetch metadata; for others, open citation modal
+        const firstUrl = urls[0]
+        const detected = detectAcademicUrl(firstUrl)
+
+        if (detected.type) {
+          // Academic URL — resolve metadata and create PaperCard
+          const { x, y } = editor.screenToPage({ x: e.clientX, y: e.clientY })
+          const shapeId = createShapeId()
+          editor.createShapes([{
+            id: shapeId, type: 'paper-card', x, y,
+            props: { title: 'Fetching…', authors: '', year: '', venue: '', contribution: '',
+              relationship: '', abstract: '', read: false, thumbnail: '', pdfKey: '', itemKey: '', citeKey: '' },
+          } as any])
+
+          ;(async () => {
+            try {
+              let meta = null
+              if (detected.type === 'doi') {
+                meta = await fetchCrossrefMetadata(detected.id)
+              } else {
+                const result: any = await window.ipcRenderer.invoke(
+                  'fetch-url',
+                  `https://export.arxiv.org/api/query?id_list=${detected.id}`,
+                )
+                if (result?.body) meta = parseArxivXml(result.body, detected.id)
+              }
+
+              let itemKey = ''
+              if (meta && userId && apiKey) {
+                try {
+                  const zotero = new ZoteroClient(userId, apiKey)
+                  itemKey = await zotero.createItem({
+                    itemType: meta.itemType,
+                    title: meta.title,
+                    creators: meta.creators,
+                    date: meta.date,
+                    abstractNote: meta.abstractNote,
+                    ...(meta.DOI ? { DOI: meta.DOI } : {}),
+                    ...(meta.publicationTitle ? { publicationTitle: meta.publicationTitle } : {}),
+                    ...(meta.proceedingsTitle ? { proceedingsTitle: meta.proceedingsTitle } : {}),
+                    ...(meta.url ? { url: meta.url } : {}),
+                  })
+                } catch { /* Zotero optional */ }
+              }
+
+              if (meta) {
+                editor.updateShape({ id: shapeId, type: 'paper-card',
+                  props: metadataToPaperProps(meta, itemKey) } as any)
+              } else {
+                // Couldn't resolve — fall back to label from hostname
+                editor.deleteShapes([shapeId])
+                try {
+                  const label = new URL(firstUrl).hostname.replace(/^www\./, '')
+                  dropLinkCard(firstUrl, label, 'web', e.clientX, e.clientY)
+                } catch { /* ignore */ }
+              }
+            } catch (err) {
+              console.error('[URL import] failed:', err)
+              editor.deleteShapes([shapeId])
+            }
+          })()
+        } else {
+          // General URL — plain link-card (not an article)
+          urls.forEach((url, i) => {
+            try {
+              const label = new URL(url).hostname.replace(/^www\./, '')
+              dropLinkCard(url, label, 'web', e.clientX + i * (LINK_W + 10), e.clientY)
+            } catch { /* malformed URL */ }
+          })
+        }
       }
     }
 
@@ -298,87 +469,136 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
     }
   }, [editor, userId, apiKey])
 
+  const buildBibContent = useCallback(async (): Promise<string | null> => {
+    if (!editor) return null
+    const cards: any[] = []
+    for (const id of editor.getCurrentPageShapeIds()) {
+      const s = editor.getShape(id) as any
+      if (s?.type === 'paper-card') cards.push(s)
+    }
+    if (cards.length === 0) return null
+
+    const zotero = new ZoteroClient(userId, apiKey)
+    const itemKeys = cards.map((c: any) => c.props.itemKey).filter(Boolean)
+    const fetched: Record<string, any> = {}
+    if (itemKeys.length) {
+      const items = await zotero.fetchItemsByKeys(itemKeys)
+      items.forEach((item: any) => { fetched[item.key] = item })
+    }
+
+    const usedKeys = new Set<string>()
+    const entries: string[] = []
+
+    for (const card of cards) {
+      const { itemKey, citeKey: shapeCiteKey, title, authors, year, venue, abstract } = card.props
+      const item = fetched[itemKey]
+
+      let key = shapeCiteKey?.trim()
+      if (!key) {
+        key = item ? makeCiteKey(item, usedKeys) : makeCiteKey(
+          { data: { creators: authors ? [{ lastName: authors.split(',')[0].trim() }] : [], date: year } },
+          usedKeys,
+        )
+      } else {
+        if (usedKeys.has(key)) {
+          for (let i = 97; i <= 122; i++) {
+            const k = key + String.fromCharCode(i)
+            if (!usedKeys.has(k)) { key = k; break }
+          }
+        }
+        usedKeys.add(key)
+      }
+
+      if (item) {
+        entries.push(generateBibEntry(item, key))
+      } else {
+        const fallback = {
+          data: {
+            itemType: venue ? 'journalArticle' : 'misc',
+            title, date: year,
+            creators: authors
+              ? authors.split(',').map((n: string) => ({ lastName: n.trim(), creatorType: 'author' }))
+              : [],
+            publicationTitle: venue,
+            abstractNote: abstract,
+          }
+        }
+        entries.push(generateBibEntry(fallback, key))
+      }
+    }
+
+    const name = workspaceId ?? 'workspace'
+    return assembleBibFile(entries, name)
+  }, [editor, userId, apiKey, workspaceId])
+
   const exportBib = useCallback(async () => {
     if (!editor || exportState === 'busy') return
     setExportState('busy')
     try {
-      // Collect all paper-card shapes on the current page
-      const cards: any[] = []
-      for (const id of editor.getCurrentPageShapeIds()) {
-        const s = editor.getShape(id) as any
-        if (s?.type === 'paper-card') cards.push(s)
-      }
-      if (cards.length === 0) { setExportState('idle'); return }
-
-      // Batch-fetch full item data from Zotero for cards that have an itemKey
-      const zotero = new ZoteroClient(userId, apiKey)
-      const itemKeys = cards.map(c => c.props.itemKey).filter(Boolean)
-      const fetched: Record<string, any> = {}
-      if (itemKeys.length) {
-        const items = await zotero.fetchItemsByKeys(itemKeys)
-        items.forEach((item: any) => { fetched[item.key] = item })
-      }
-
-      const usedKeys = new Set<string>()
-      const entries: string[] = []
-
-      for (const card of cards) {
-        const { itemKey, citeKey: shapeCiteKey, title, authors, year, venue, abstract } = card.props
-        const item = fetched[itemKey]
-
-        // Use the citeKey from shape props if Better BibTeX set one; otherwise derive it
-        let key = shapeCiteKey?.trim()
-        if (!key) {
-          key = item ? makeCiteKey(item, usedKeys) : makeCiteKey(
-            { data: { creators: authors ? [{ lastName: authors.split(',')[0].trim() }] : [], date: year } },
-            usedKeys,
-          )
-        } else {
-          // Ensure uniqueness even for BBT keys
-          if (usedKeys.has(key)) {
-            for (let i = 97; i <= 122; i++) {
-              const k = key + String.fromCharCode(i)
-              if (!usedKeys.has(k)) { key = k; break }
-            }
-          }
-          usedKeys.add(key)
-        }
-
-        if (item) {
-          entries.push(generateBibEntry(item, key))
-        } else {
-          // Fallback: synthesise a minimal entry from shape props alone
-          const fallback = {
-            data: {
-              itemType: venue ? 'journalArticle' : 'misc',
-              title, date: year,
-              creators: authors
-                ? authors.split(',').map((n: string) => ({ lastName: n.trim(), creatorType: 'author' }))
-                : [],
-              publicationTitle: venue,
-              abstractNote: abstract,
-            }
-          }
-          entries.push(generateBibEntry(fallback, key))
-        }
-      }
-
+      const content = await buildBibContent()
+      if (!content) { setExportState('idle'); return }
       const filename = `${workspaceId ?? 'workspace'}.bib`
-      const content = assembleBibFile(entries, filename.replace('.bib', ''))
       await window.ipcRenderer.invoke('save-bib-file', content, filename)
-
       setExportState('done')
       setTimeout(() => setExportState('idle'), 2000)
     } catch (e) {
       console.error('[export-bib]', e)
       setExportState('idle')
     }
-  }, [editor, exportState, userId, apiKey, workspaceId])
+  }, [editor, exportState, buildBibContent, workspaceId])
+
+  const copyBib = useCallback(async () => {
+    if (!editor || copyState === 'busy') return
+    setCopyState('busy')
+    try {
+      const content = await buildBibContent()
+      if (!content) { setCopyState('idle'); return }
+      await navigator.clipboard.writeText(content)
+      setCopyState('done')
+      setTimeout(() => setCopyState('idle'), 2000)
+    } catch (e) {
+      console.error('[copy-bib]', e)
+      setCopyState('idle')
+    }
+  }, [editor, copyState, buildBibContent])
 
   const updateCard = useCallback((id: string, props: Partial<SelectedCard['props']>) => {
     if (!editor) return
     editor.updateShape({ id, type: 'paper-card', props } as any)
     setPinnedCard(prev => prev && prev.id === id ? { ...prev, props: { ...prev.props, ...props } } : prev)
+  }, [editor])
+
+  const handleCiteWebSubmit = useCallback((data: WebCiteData) => {
+    if (!editor) return
+    const screenPos = citeWebDropPos.current
+    let x: number, y: number
+    if (screenPos) {
+      const p = editor.screenToPage(screenPos)
+      x = p.x; y = p.y
+    } else {
+      const vp = editor.getViewportPageBounds()
+      x = vp.x + vp.w / 2 - 95
+      y = vp.y + vp.h / 2 - 115
+    }
+    citeWebDropPos.current = null
+    editor.createShapes([{
+      id: createShapeId(), type: 'paper-card', x, y,
+      props: {
+        title: data.title || data.url,
+        authors: data.authors.trim(),
+        year: data.year,
+        venue: data.venue,
+        abstract: '',
+        contribution: '',
+        relationship: '',
+        read: false,
+        thumbnail: '',
+        pdfKey: '',
+        citeKey: '',
+        itemKey: '',
+      },
+    } as any])
+    setCiteWebModal(null)
   }, [editor])
 
   return (
@@ -441,26 +661,28 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         )}
       </div>
 
-      {/* Background settings */}
-      {showBgPanel && (
-        <BackgroundSettings
+      {/* Customize panel (font + background) */}
+      {showCustomizePanel && (
+        <CustomizePanel
+          font={font}
+          onFontChange={saveFont}
           background={background}
           onColorChange={color => saveBackground({ ...background, type: 'color', color })}
           onPickImage={pickBgImage}
           onModeChange={mode => saveBackground({ ...background, imageMode: mode })}
           onSwitchToColor={() => saveBackground({ ...background, type: 'color' })}
-          onClose={() => setShowBgPanel(false)}
+          onClose={() => setShowCustomizePanel(false)}
         />
       )}
       <button
-        onClick={() => setShowBgPanel(p => !p)}
-        title="Canvas background"
+        onClick={() => { citeWebDropPos.current = null; setCiteWebModal('') }}
+        title="Add a web article citation"
         style={{
-          position: 'absolute', bottom: 60, right: 16, zIndex: 201,
+          position: 'absolute', bottom: 104, right: 16, zIndex: 201,
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '7px 13px', borderRadius: 20,
           border: 'none', cursor: 'pointer',
-          backgroundColor: showBgPanel ? '#374151' : 'rgba(30,30,40,0.75)',
+          backgroundColor: 'rgba(30,30,40,0.75)',
           backdropFilter: 'blur(6px)',
           color: '#fff', fontSize: 12, fontWeight: 600,
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
@@ -470,35 +692,92 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1.04)' }}
         onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1)' }}
       >
-        <Palette size={13} /> Background
+        <Link size={13} /> Cite article
       </button>
-
-      {/* BibTeX export button */}
       <button
-        onClick={exportBib}
-        disabled={exportState === 'busy'}
-        title="Export citations as .bib"
+        onClick={() => setShowCustomizePanel(p => !p)}
+        title="Customize workspace"
         style={{
-          position: 'absolute', bottom: 16, right: 16, zIndex: 201,
+          position: 'absolute', bottom: 60, right: 16, zIndex: 201,
           display: 'flex', alignItems: 'center', gap: 6,
           padding: '7px 13px', borderRadius: 20,
-          border: 'none', cursor: exportState === 'busy' ? 'default' : 'pointer',
-          backgroundColor: exportState === 'done' ? '#16a34a' : '#6366f1',
+          border: 'none', cursor: 'pointer',
+          backgroundColor: showCustomizePanel ? '#374151' : 'rgba(30,30,40,0.75)',
+          backdropFilter: 'blur(6px)',
           color: '#fff', fontSize: 12, fontWeight: 600,
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-          boxShadow: '0 2px 12px rgba(99,102,241,0.35)',
-          transition: 'background-color 0.2s, transform 0.1s',
-          opacity: exportState === 'busy' ? 0.7 : 1,
+          boxShadow: '0 2px 12px rgba(0,0,0,0.25)',
+          transition: 'background-color 0.15s, transform 0.1s',
         }}
-        onMouseEnter={e => { if (exportState === 'idle') (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1.04)' }}
+        onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1.04)' }}
         onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1)' }}
       >
-        {exportState === 'busy'
-          ? <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> Exporting…</>
-          : exportState === 'done'
-          ? <><Check size={13} /> Exported!</>
-          : <><Download size={13} /> Export .bib</>}
+        <SlidersHorizontal size={13} /> Customize
       </button>
+
+      {/* BibTeX buttons */}
+      <div style={{
+        position: 'absolute', bottom: 16, right: 16, zIndex: 201,
+        display: 'flex', alignItems: 'center', gap: 8,
+      }}>
+        <button
+          onClick={copyBib}
+          disabled={copyState === 'busy'}
+          title="Copy citations to clipboard"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '7px 13px', borderRadius: 20,
+            border: 'none', cursor: copyState === 'busy' ? 'default' : 'pointer',
+            backgroundColor: copyState === 'done' ? '#16a34a' : 'rgba(30,30,40,0.75)',
+            backdropFilter: 'blur(6px)',
+            color: '#fff', fontSize: 12, fontWeight: 600,
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.25)',
+            transition: 'background-color 0.2s, transform 0.1s',
+            opacity: copyState === 'busy' ? 0.7 : 1,
+          }}
+          onMouseEnter={e => { if (copyState === 'idle') (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1.04)' }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1)' }}
+        >
+          {copyState === 'busy'
+            ? <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> Copying…</>
+            : copyState === 'done'
+            ? <><ClipboardCheck size={13} /> Copied!</>
+            : <><Copy size={13} /> Copy .bib</>}
+        </button>
+        <button
+          onClick={exportBib}
+          disabled={exportState === 'busy'}
+          title="Export citations as .bib file"
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '7px 13px', borderRadius: 20,
+            border: 'none', cursor: exportState === 'busy' ? 'default' : 'pointer',
+            backgroundColor: exportState === 'done' ? '#16a34a' : '#6366f1',
+            color: '#fff', fontSize: 12, fontWeight: 600,
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+            boxShadow: '0 2px 12px rgba(99,102,241,0.35)',
+            transition: 'background-color 0.2s, transform 0.1s',
+            opacity: exportState === 'busy' ? 0.7 : 1,
+          }}
+          onMouseEnter={e => { if (exportState === 'idle') (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1.04)' }}
+          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.transform = 'scale(1)' }}
+        >
+          {exportState === 'busy'
+            ? <><Loader2 size={13} style={{ animation: 'spin 1s linear infinite' }} /> Exporting…</>
+            : exportState === 'done'
+            ? <><Check size={13} /> Exported!</>
+            : <><Download size={13} /> Export .bib</>}
+        </button>
+      </div>
+
+      {citeWebModal !== null && (
+        <CiteWebModal
+          initialUrl={citeWebModal}
+          onSubmit={handleCiteWebSubmit}
+          onCancel={() => setCiteWebModal(null)}
+        />
+      )}
     </div>
   )
 }
@@ -814,9 +1093,11 @@ function PanelField({ label, placeholder, value, onChange }: {
   )
 }
 
-// ─── BackgroundSettings ───────────────────────────────────────────────────────
+// ─── CustomizePanel ───────────────────────────────────────────────────────────
 
-function BackgroundSettings({ background, onColorChange, onPickImage, onModeChange, onSwitchToColor, onClose }: {
+function CustomizePanel({ font, onFontChange, background, onColorChange, onPickImage, onModeChange, onSwitchToColor, onClose }: {
+  font: string;
+  onFontChange: (f: string) => void;
   background: BackgroundConfig;
   onColorChange: (color: string) => void;
   onPickImage: () => void;
@@ -824,120 +1105,139 @@ function BackgroundSettings({ background, onColorChange, onPickImage, onModeChan
   onSwitchToColor: () => void;
   onClose: () => void;
 }) {
-  const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+  const uiFont = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
   return (
     <>
-      {/* Backdrop to close on outside click */}
       <div style={{ position: 'absolute', inset: 0, zIndex: 210 }} onClick={onClose} />
       <div style={{
         position: 'absolute', bottom: 104, right: 16, zIndex: 211,
         width: 240, backgroundColor: '#fff', borderRadius: 12,
         boxShadow: '0 8px 32px rgba(0,0,0,0.18)', border: '1px solid #e5e7eb',
-        fontFamily: font, overflow: 'hidden',
+        fontFamily: uiFont, overflow: 'hidden',
       }}>
         {/* Header */}
         <div style={{ padding: '12px 14px 10px', borderBottom: '1px solid #f3f4f6', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontWeight: 700, fontSize: 13, color: '#111' }}>Background</span>
+          <span style={{ fontWeight: 700, fontSize: 13, color: '#111' }}>Customize</span>
           <button onClick={onClose} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#9ca3af', padding: 2, display: 'flex' }}>
             <X size={14} />
           </button>
         </div>
 
         <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* Type toggle */}
-          <div style={{ display: 'flex', backgroundColor: '#f3f4f6', borderRadius: 7, padding: 2, gap: 2 }}>
-            {(['color', 'image'] as const).map(t => (
-              <button key={t} onClick={() => t === 'color' ? onSwitchToColor() : onPickImage()} style={{
-                flex: 1, border: 'none', cursor: 'pointer', borderRadius: 5, padding: '5px 0',
-                fontSize: 11.5, fontWeight: background.type === t ? 600 : 400,
-                backgroundColor: background.type === t ? '#fff' : 'transparent',
-                color: background.type === t ? '#111' : '#6b7280',
-                boxShadow: background.type === t ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                fontFamily: 'inherit', transition: 'all 0.15s',
-              }}>
-                {t === 'color' ? <><Palette size={11} /> Color</> : <><ImageIcon size={11} /> Image</>}
-              </button>
-            ))}
+
+          {/* ── Font ── */}
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Font</div>
+            <select
+              value={font}
+              onChange={e => onFontChange(e.target.value)}
+              style={{
+                width: '100%', padding: '6px 10px', borderRadius: 7,
+                border: '1.5px solid #e5e7eb', backgroundColor: '#fff',
+                color: '#374151', fontSize: 13, cursor: 'pointer', outline: 'none',
+                fontFamily: `'${font}', ${uiFont}`,
+              }}
+            >
+              {FONTS.map(f => (
+                <option key={f.value} value={f.value}>{f.label}</option>
+              ))}
+            </select>
           </div>
 
-          {background.type === 'color' ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {/* Preset swatches */}
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {BG_PRESETS.map(c => (
-                  <button key={c} onClick={() => onColorChange(c)} style={{
-                    width: 26, height: 26, borderRadius: 6, border: background.color === c ? '2px solid #6366f1' : '1.5px solid #e5e7eb',
-                    backgroundColor: c, cursor: 'pointer', padding: 0,
-                    boxShadow: background.color === c ? '0 0 0 2px #c7d2fe' : 'none',
-                    transition: 'box-shadow 0.15s',
-                  }} />
-                ))}
-              </div>
-              {/* Custom color picker */}
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <div style={{
-                  width: 26, height: 26, borderRadius: 6, border: '1.5px solid #e5e7eb',
-                  backgroundColor: background.color, flexShrink: 0,
-                  backgroundImage: 'linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%)',
-                  backgroundSize: '6px 6px', backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0px',
-                  overflow: 'hidden',
-                }}>
-                  <input type="color" value={background.color} onChange={e => onColorChange(e.target.value)}
-                    style={{ opacity: 0, width: '100%', height: '100%', cursor: 'pointer', border: 'none', padding: 0 }} />
-                </div>
-                <span style={{ fontSize: 12, color: '#374151', fontFamily: 'monospace' }}>{background.color}</span>
-              </label>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {/* Image preview */}
-              <div style={{
-                height: 90, borderRadius: 8, border: '1.5px dashed #e5e7eb',
-                backgroundColor: '#f9fafb', overflow: 'hidden', display: 'flex',
-                alignItems: 'center', justifyContent: 'center', position: 'relative',
-              }}>
-                {background.imageDataUrl
-                  ? <img src={background.imageDataUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                  : <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, color: '#9ca3af' }}>
-                      <ImageIcon size={22} />
-                      <span style={{ fontSize: 11 }}>No image selected</span>
-                    </div>
-                }
-              </div>
-              <button onClick={onPickImage} style={{
-                border: '1px solid #e5e7eb', backgroundColor: '#fff', borderRadius: 7,
-                padding: '6px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                color: '#374151', fontFamily: 'inherit', display: 'flex', alignItems: 'center',
-                justifyContent: 'center', gap: 6,
-              }}>
-                <ImageIcon size={12} /> Choose Image…
-              </button>
+          <div style={{ borderTop: '1px solid #f3f4f6', margin: '0 -14px' }} />
 
-              {/* Fill / Tile */}
-              {background.imageDataUrl && (
-                <div>
-                  <div style={{ fontSize: 10.5, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
-                    Scale
-                  </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {(['fill', 'tile'] as const).map(mode => (
-                      <button key={mode} onClick={() => onModeChange(mode)} style={{
-                        flex: 1, border: background.imageMode === mode ? '1.5px solid #6366f1' : '1.5px solid #e5e7eb',
-                        backgroundColor: background.imageMode === mode ? '#eef2ff' : '#fff',
-                        color: background.imageMode === mode ? '#4f46e5' : '#6b7280',
-                        borderRadius: 6, padding: '5px 0', fontSize: 11.5,
-                        fontWeight: background.imageMode === mode ? 600 : 400,
-                        cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize',
-                      }}>
-                        {mode === 'fill' ? 'Fill' : 'Tile'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
+          {/* ── Background ── */}
+          <div>
+            <div style={{ fontSize: 10.5, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Background</div>
+
+            {/* Type toggle */}
+            <div style={{ display: 'flex', backgroundColor: '#f3f4f6', borderRadius: 7, padding: 2, gap: 2, marginBottom: 12 }}>
+              {(['color', 'image'] as const).map(t => (
+                <button key={t} onClick={() => t === 'color' ? onSwitchToColor() : onPickImage()} style={{
+                  flex: 1, border: 'none', cursor: 'pointer', borderRadius: 5, padding: '5px 0',
+                  fontSize: 11.5, fontWeight: background.type === t ? 600 : 400,
+                  backgroundColor: background.type === t ? '#fff' : 'transparent',
+                  color: background.type === t ? '#111' : '#6b7280',
+                  boxShadow: background.type === t ? '0 1px 3px rgba(0,0,0,0.1)' : 'none',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                  fontFamily: 'inherit', transition: 'all 0.15s',
+                }}>
+                  {t === 'color' ? <><Palette size={11} /> Color</> : <><ImageIcon size={11} /> Image</>}
+                </button>
+              ))}
             </div>
-          )}
+
+            {background.type === 'color' ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {BG_PRESETS.map(c => (
+                    <button key={c} onClick={() => onColorChange(c)} style={{
+                      width: 26, height: 26, borderRadius: 6, border: background.color === c ? '2px solid #6366f1' : '1.5px solid #e5e7eb',
+                      backgroundColor: c, cursor: 'pointer', padding: 0,
+                      boxShadow: background.color === c ? '0 0 0 2px #c7d2fe' : 'none',
+                      transition: 'box-shadow 0.15s',
+                    }} />
+                  ))}
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <div style={{
+                    width: 26, height: 26, borderRadius: 6, border: '1.5px solid #e5e7eb',
+                    backgroundColor: background.color, flexShrink: 0,
+                    backgroundImage: 'linear-gradient(45deg, #ccc 25%, transparent 25%), linear-gradient(-45deg, #ccc 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #ccc 75%), linear-gradient(-45deg, transparent 75%, #ccc 75%)',
+                    backgroundSize: '6px 6px', backgroundPosition: '0 0, 0 3px, 3px -3px, -3px 0px',
+                    overflow: 'hidden',
+                  }}>
+                    <input type="color" value={background.color} onChange={e => onColorChange(e.target.value)}
+                      style={{ opacity: 0, width: '100%', height: '100%', cursor: 'pointer', border: 'none', padding: 0 }} />
+                  </div>
+                  <span style={{ fontSize: 12, color: '#374151', fontFamily: 'monospace' }}>{background.color}</span>
+                </label>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{
+                  height: 90, borderRadius: 8, border: '1.5px dashed #e5e7eb',
+                  backgroundColor: '#f9fafb', overflow: 'hidden', display: 'flex',
+                  alignItems: 'center', justifyContent: 'center', position: 'relative',
+                }}>
+                  {background.imageDataUrl
+                    ? <img src={background.imageDataUrl} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    : <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, color: '#9ca3af' }}>
+                        <ImageIcon size={22} />
+                        <span style={{ fontSize: 11 }}>No image selected</span>
+                      </div>
+                  }
+                </div>
+                <button onClick={onPickImage} style={{
+                  border: '1px solid #e5e7eb', backgroundColor: '#fff', borderRadius: 7,
+                  padding: '6px 0', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                  color: '#374151', fontFamily: 'inherit', display: 'flex', alignItems: 'center',
+                  justifyContent: 'center', gap: 6,
+                }}>
+                  <ImageIcon size={12} /> Choose Image…
+                </button>
+                {background.imageDataUrl && (
+                  <div>
+                    <div style={{ fontSize: 10.5, fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>Scale</div>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {(['fill', 'tile'] as const).map(mode => (
+                        <button key={mode} onClick={() => onModeChange(mode)} style={{
+                          flex: 1, border: background.imageMode === mode ? '1.5px solid #6366f1' : '1.5px solid #e5e7eb',
+                          backgroundColor: background.imageMode === mode ? '#eef2ff' : '#fff',
+                          color: background.imageMode === mode ? '#4f46e5' : '#6b7280',
+                          borderRadius: 6, padding: '5px 0', fontSize: 11.5,
+                          fontWeight: background.imageMode === mode ? 600 : 400,
+                          cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize',
+                        }}>
+                          {mode === 'fill' ? 'Fill' : 'Tile'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </>
