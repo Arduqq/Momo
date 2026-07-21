@@ -20,13 +20,14 @@ import { PdfViewer } from './PdfViewer'
 const customShapeUtils = [PaperCardShapeUtil, LinkCardShapeUtil]
 
 interface BackgroundConfig {
-  type: 'color' | 'image';
+  type: 'color' | 'image' | 'gradient';
   color: string;
+  gradient: string;
   imageDataUrl: string;
   imageMode: 'fill' | 'tile';
 }
 
-const DEFAULT_BG: BackgroundConfig = { type: 'color', color: '#1a1a2e', imageDataUrl: '', imageMode: 'fill' }
+const DEFAULT_BG: BackgroundConfig = { type: 'color', color: '#1a1a2e', gradient: '', imageDataUrl: '', imageMode: 'fill' }
 
 const BG_PRESETS = ['#1a1a2e', '#0f172a', '#111827', '#1e1b4b', '#f8f9fa', '#ffffff']
 
@@ -39,6 +40,21 @@ const FONTS = [
   { label: 'Playfair Display',  value: 'Playfair Display' },
   { label: 'Crimson Text',      value: 'Crimson Text' },
   { label: 'JetBrains Mono',    value: 'JetBrains Mono' },
+] as const
+
+export const GRADIENT_PRESETS = [
+  { label: 'Space',  value: 'linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)' },
+  { label: 'Dusk',   value: 'linear-gradient(135deg, #2c3e50 0%, #4a1942 100%)' },
+  { label: 'Forest', value: 'linear-gradient(135deg, #134e5e 0%, #71b280 100%)' },
+  { label: 'Ember',  value: 'linear-gradient(135deg, #1a0000 0%, #3d1c00 100%)' },
+  { label: 'Ocean',  value: 'linear-gradient(135deg, #000428 0%, #004e92 100%)' },
+  { label: 'Slate',  value: 'linear-gradient(135deg, #1e2433 0%, #2d3748 100%)' },
+] as const
+
+export const THEMES = [
+  { label: 'Dark',  bg: { type: 'color' as const,    color: '#1a1a2e', gradient: '' }, dark: true  },
+  { label: 'Slate', bg: { type: 'gradient' as const, color: '',        gradient: 'linear-gradient(135deg, #1e2433 0%, #2d3748 100%)' }, dark: true },
+  { label: 'Paper', bg: { type: 'color' as const,    color: '#faf6f0', gradient: '' }, dark: false },
 ] as const
 
 interface SelectedCard {
@@ -98,7 +114,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
       if (stored.type === 'image' && stored.imagePath) {
         imageDataUrl = (await window.ipcRenderer.invoke('read-image-file', stored.imagePath)) ?? ''
       }
-      setBackground({ type: stored.type ?? 'color', color: stored.color ?? DEFAULT_BG.color, imageDataUrl, imageMode: stored.imageMode ?? 'fill' })
+      setBackground({ type: stored.type ?? 'color', color: stored.color ?? DEFAULT_BG.color, gradient: stored.gradient ?? '', imageDataUrl, imageMode: stored.imageMode ?? 'fill' })
     })
   }, [workspaceId])
 
@@ -106,7 +122,8 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
     setBackground(bg)
     if (!workspaceId) return
     await window.ipcRenderer.invoke('set-workspace-background', workspaceId, {
-      type: bg.type, color: bg.color, imagePath: bgPathRef.current, imageMode: bg.imageMode,
+      type: bg.type, color: bg.color, gradient: bg.gradient,
+      imagePath: bgPathRef.current, imageMode: bg.imageMode,
     })
   }, [workspaceId])
 
@@ -633,6 +650,8 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         position: 'absolute', inset: 0, zIndex: 0,
         ...(background.type === 'color'
           ? { backgroundColor: background.color }
+          : background.type === 'gradient'
+          ? { backgroundImage: background.gradient, backgroundSize: 'cover' }
           : {
               backgroundImage: `url(${background.imageDataUrl})`,
               backgroundSize: background.imageMode === 'fill' ? 'cover' : 'auto',
