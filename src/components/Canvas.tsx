@@ -614,6 +614,20 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
 
   return (
     <div ref={containerRef} style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
+      <style>{`
+        .tlui-layout__top__right {
+          position: absolute !important;
+          top: auto !important;
+          bottom: 68px !important;
+          left: 50% !important;
+          right: auto !important;
+          transform: translateX(-50%) !important;
+          pointer-events: none;
+        }
+        .tlui-layout__top__right > * {
+          pointer-events: all;
+        }
+      `}</style>
       {/* Canvas background */}
       <div style={{
         position: 'absolute', inset: 0, zIndex: 0,
