@@ -1204,9 +1204,10 @@ const CB_SIZES: { label: string; value: TLDefaultSizeStyle }[] = [
 ]
 
 const CB_FILLS: { label: string; value: FillStyle }[] = [
-  { label: 'None',  value: 'none'  },
-  { label: 'Semi',  value: 'semi'  },
-  { label: 'Solid', value: 'solid' },
+  { label: 'None',    value: 'none'    },
+  { label: 'Semi',    value: 'semi'    },
+  { label: 'Solid',   value: 'solid'   },
+  { label: 'Pattern', value: 'pattern' },
 ]
 
 const CB_ALIGNS: { label: string; value: AlignStyle; Icon: LucideIcon }[] = [
@@ -1231,10 +1232,10 @@ function ContextBar({ editor }: { editor: Editor }) {
   const topLeft  = editor.pageToScreen({ x: bounds.minX, y: bounds.minY })
   const topRight = editor.pageToScreen({ x: bounds.maxX, y: bounds.minY })
   const centerX  = (topLeft.x + topRight.x) / 2
-  const top      = Math.max(8, topLeft.y - 52)
+  const top      = Math.max(160, topLeft.y - 8)
 
   const types = new Set(shapes.map(s => s.type))
-  const hasFill  = types.has('text') || types.has('note') || types.has('geo') || types.has('draw') || types.has('arrow')
+  const hasFill  = types.has('note') || types.has('geo') || types.has('draw') || types.has('arrow')
   const hasAlign = types.has('text') || types.has('note') || types.has('geo')
 
   const currentColor = editor.getStyleForNextShape(DefaultColorStyle)
@@ -1263,7 +1264,7 @@ function ContextBar({ editor }: { editor: Editor }) {
     position: 'absolute' as const,
     left: centerX,
     top,
-    transform: 'translateX(-50%)',
+    transform: 'translate(-50%, -100%)',
     zIndex: 300,
     display: 'flex',
     flexDirection: 'column' as const,
