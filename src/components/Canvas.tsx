@@ -1,4 +1,5 @@
-import { Tldraw, createShapeId, Editor } from 'tldraw'
+import { Tldraw, createShapeId, Editor, DefaultColorStyle, DefaultSizeStyle } from 'tldraw'
+import type { TLDefaultColorStyle, TLDefaultSizeStyle } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { PaperCardShapeUtil } from './PaperCard'
 import { LinkCardShapeUtil, LINK_W, LINK_H } from './LinkCard'
@@ -56,6 +57,28 @@ const THEMES = [
   { label: 'Slate', bg: { type: 'gradient' as const, color: '',        gradient: 'linear-gradient(135deg, #1e2433 0%, #2d3748 100%)' }, dark: true },
   { label: 'Paper', bg: { type: 'color' as const,    color: '#faf6f0', gradient: '' }, dark: false },
 ] as const
+
+const TLDRAW_COLORS: { name: TLDefaultColorStyle; hex: string }[] = [
+  { name: 'black',        hex: '#1d1d1d' },
+  { name: 'grey',         hex: '#9ca3af' },
+  { name: 'red',          hex: '#e03131' },
+  { name: 'orange',       hex: '#f08c00' },
+  { name: 'yellow',       hex: '#fab005' },
+  { name: 'green',        hex: '#2f9e44' },
+  { name: 'blue',         hex: '#1971c2' },
+  { name: 'violet',       hex: '#7048e8' },
+  { name: 'white',        hex: '#f1f3f5' },
+]
+
+const SIZE_OPTIONS: { label: string; size: TLDefaultSizeStyle; extra: number }[] = [
+  { label: 'S',   size: 's',  extra: 0 },
+  { label: 'M',   size: 'm',  extra: 0 },
+  { label: 'L',   size: 'l',  extra: 0 },
+  { label: 'XL',  size: 'xl', extra: 0 },
+  { label: '2XL', size: 'xl', extra: 2 },
+  { label: '3XL', size: 'xl', extra: 4 },
+  { label: '4XL', size: 'xl', extra: 6 },
+]
 
 interface SelectedCard {
   id: string;
@@ -654,20 +677,6 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
 
   return (
     <div ref={containerRef} style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
-      <style>{`
-        .tlui-layout__top__right {
-          position: absolute !important;
-          top: auto !important;
-          bottom: 68px !important;
-          left: 50% !important;
-          right: auto !important;
-          transform: translateX(-50%) !important;
-          pointer-events: none;
-        }
-        .tlui-layout__top__right > * {
-          pointer-events: all;
-        }
-      `}</style>
       {/* Canvas background */}
       <div style={{
         position: 'absolute', inset: 0, zIndex: 0,
@@ -686,8 +695,16 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         onMount={onMount}
         shapeUtils={customShapeUtils}
         cameraOptions={{ zoomSteps: [0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8] }}
-        components={{ Background: () => null }}
+        components={{ Background: () => null, StylePanel: () => null }}
       />
+
+      {editor && (
+        <SizeBar
+          editor={editor}
+          strokeExtra={strokeExtra}
+          onStrokeExtraChange={saveStrokeExtra}
+        />
+      )}
 
       {pdfOpen && (
         <PdfViewer
@@ -1177,6 +1194,114 @@ function PanelField({ label, placeholder, value, onChange }: {
         onFocus={e => (e.target.style.borderColor = '#6366f1')}
         onBlur={e => (e.target.style.borderColor = '#e5e7eb')}
       />
+    </div>
+  )
+}
+
+// ─── SizeBar ─────────────────────────────────────────────────────────────────
+
+function SizeBar({ editor, strokeExtra, onStrokeExtraChange }: {
+  editor: Editor
+  strokeExtra: number
+  onStrokeExtraChange: (v: number) => void
+}) {
+  const [activeColor, setActiveColor] = useState<TLDefaultColorStyle>('black')
+  const [activeSize, setActiveSize] = useState<TLDefaultSizeStyle>('m')
+
+  useEffect(() => {
+    const sync = () => {
+      setActiveColor(editor.getStyleForNextShape(DefaultColorStyle))
+      setActiveSize(editor.getStyleForNextShape(DefaultSizeStyle))
+    }
+    sync()
+    return editor.store.listen(sync, { scope: 'session' })
+  }, [editor])
+
+  const pickColor = (color: TLDefaultColorStyle) => {
+    editor.setStyleForNextShapes(DefaultColorStyle, color)
+    editor.setStyleForSelectedShapes(DefaultColorStyle, color)
+  }
+
+  const pickSize = (size: TLDefaultSizeStyle, extra: number) => {
+    editor.setStyleForNextShapes(DefaultSizeStyle, size)
+    editor.setStyleForSelectedShapes(DefaultSizeStyle, size)
+    onStrokeExtraChange(extra)
+  }
+
+  return (
+    <div style={{
+      position: 'absolute',
+      bottom: 68,
+      left: '50%',
+      transform: 'translateX(-50%)',
+      zIndex: 300,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      background: 'rgba(20, 20, 30, 0.92)',
+      backdropFilter: 'blur(8px)',
+      borderRadius: 10,
+      padding: '6px 12px',
+      boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
+      border: '1px solid rgba(255,255,255,0.08)',
+      pointerEvents: 'all',
+    }}>
+      {/* Color swatches */}
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        {TLDRAW_COLORS.map(c => (
+          <button
+            key={c.name}
+            onClick={() => pickColor(c.name)}
+            title={c.name}
+            style={{
+              width: 18,
+              height: 18,
+              borderRadius: '50%',
+              background: c.hex,
+              border: activeColor === c.name
+                ? '2px solid #818cf8'
+                : c.name === 'white' ? '1px solid rgba(255,255,255,0.3)' : '1.5px solid transparent',
+              padding: 0,
+              cursor: 'pointer',
+              flexShrink: 0,
+              boxShadow: activeColor === c.name ? '0 0 0 2px rgba(129,140,248,0.5)' : 'none',
+              transition: 'box-shadow 0.1s',
+            }}
+          />
+        ))}
+      </div>
+
+      {/* Divider */}
+      <div style={{ width: 1, height: 22, background: 'rgba(255,255,255,0.12)', flexShrink: 0 }} />
+
+      {/* Size buttons */}
+      <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+        {SIZE_OPTIONS.map(opt => {
+          const isActive = activeSize === opt.size && strokeExtra === opt.extra
+          return (
+            <button
+              key={opt.label}
+              onClick={() => pickSize(opt.size, opt.extra)}
+              style={{
+                minWidth: 34,
+                height: 26,
+                borderRadius: 6,
+                border: isActive ? '1.5px solid #818cf8' : '1px solid rgba(255,255,255,0.12)',
+                background: isActive ? '#4f46e5' : 'transparent',
+                color: isActive ? '#fff' : 'rgba(255,255,255,0.65)',
+                fontSize: 11,
+                fontWeight: isActive ? 600 : 400,
+                cursor: 'pointer',
+                padding: '0 6px',
+                transition: 'all 0.1s',
+                fontFamily: 'inherit',
+              }}
+            >
+              {opt.label}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
