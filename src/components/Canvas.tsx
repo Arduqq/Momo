@@ -1,4 +1,4 @@
-import { Tldraw, createShapeId, Editor, DefaultColorStyle, DefaultSizeStyle } from 'tldraw'
+import { Tldraw, createShapeId, Editor, DefaultColorStyle, DefaultSizeStyle, DefaultFillStyle, DefaultTextAlignStyle } from 'tldraw'
 import type { TLDefaultColorStyle, TLDefaultSizeStyle } from 'tldraw'
 import 'tldraw/tldraw.css'
 import { PaperCardShapeUtil } from './PaperCard'
@@ -15,7 +15,7 @@ import {
 import { CiteWebModal } from './CiteWebModal'
 import type { WebCiteData } from './CiteWebModal'
 import TextareaAutosize from 'react-textarea-autosize'
-import { X, FileText, Download, Check, Loader2, RefreshCw, Palette, Image as ImageIcon, Copy, ClipboardCheck, Link, SlidersHorizontal } from 'lucide-react'
+import { X, FileText, Download, Check, Loader2, RefreshCw, Palette, Image as ImageIcon, Copy, ClipboardCheck, Link, SlidersHorizontal, AlignLeft, AlignCenter, AlignRight, type LucideIcon } from 'lucide-react'
 import { PdfViewer } from './PdfViewer'
 
 const customShapeUtils = [PaperCardShapeUtil, LinkCardShapeUtil]
@@ -70,15 +70,6 @@ const TLDRAW_COLORS: { name: TLDefaultColorStyle; hex: string }[] = [
   { name: 'white',        hex: '#f1f3f5' },
 ]
 
-const SIZE_OPTIONS: { label: string; size: TLDefaultSizeStyle; extra: number }[] = [
-  { label: 'S',   size: 's',  extra: 0 },
-  { label: 'M',   size: 'm',  extra: 0 },
-  { label: 'L',   size: 'l',  extra: 0 },
-  { label: 'XL',  size: 'xl', extra: 0 },
-  { label: '2XL', size: 'xl', extra: 2 },
-  { label: '3XL', size: 'xl', extra: 4 },
-  { label: '4XL', size: 'xl', extra: 6 },
-]
 
 interface SelectedCard {
   id: string;
@@ -706,13 +697,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
         components={{ Background: () => null, StylePanel: () => null }}
       />
 
-      {editor && (
-        <SizeBar
-          editor={editor}
-          strokeExtra={strokeExtra}
-          onStrokeExtraChange={saveStrokeExtra}
-        />
-      )}
+      {editor && <ContextBar editor={editor} />}
 
       {pdfOpen && (
         <PdfViewer
@@ -1206,110 +1191,204 @@ function PanelField({ label, placeholder, value, onChange }: {
   )
 }
 
-// ─── SizeBar ─────────────────────────────────────────────────────────────────
+// ─── ContextBar ──────────────────────────────────────────────────────────────
 
-function SizeBar({ editor, strokeExtra, onStrokeExtraChange }: {
-  editor: Editor
-  strokeExtra: number
-  onStrokeExtraChange: (v: number) => void
-}) {
-  const [activeColor, setActiveColor] = useState<TLDefaultColorStyle>('black')
-  const [activeSize, setActiveSize] = useState<TLDefaultSizeStyle>('m')
+type FillStyle = 'none' | 'semi' | 'solid' | 'pattern'
+type AlignStyle = 'start' | 'middle' | 'end'
+
+const CB_SIZES: { label: string; value: TLDefaultSizeStyle }[] = [
+  { label: 'S',  value: 's'  },
+  { label: 'M',  value: 'm'  },
+  { label: 'L',  value: 'l'  },
+  { label: 'XL', value: 'xl' },
+]
+
+const CB_FILLS: { label: string; value: FillStyle }[] = [
+  { label: 'None',  value: 'none'  },
+  { label: 'Semi',  value: 'semi'  },
+  { label: 'Solid', value: 'solid' },
+]
+
+const CB_ALIGNS: { label: string; value: AlignStyle; Icon: LucideIcon }[] = [
+  { label: 'Left',   value: 'start',  Icon: AlignLeft   },
+  { label: 'Center', value: 'middle', Icon: AlignCenter },
+  { label: 'Right',  value: 'end',    Icon: AlignRight  },
+]
+
+function ContextBar({ editor }: { editor: Editor }) {
+  const [, forceUpdate] = useState(0)
 
   useEffect(() => {
-    const sync = () => {
-      setActiveColor(editor.getStyleForNextShape(DefaultColorStyle))
-      setActiveSize(editor.getStyleForNextShape(DefaultSizeStyle))
-    }
-    sync()
-    return editor.store.listen(sync, { scope: 'session' })
+    return editor.store.listen(() => forceUpdate(n => n + 1), { scope: 'session' })
   }, [editor])
 
-  const pickColor = (color: TLDefaultColorStyle) => {
+  const shapes = editor.getSelectedShapes()
+  if (shapes.length === 0) return null
+
+  const bounds = editor.getSelectionPageBounds()
+  if (!bounds) return null
+
+  const topLeft  = editor.pageToScreen({ x: bounds.minX, y: bounds.minY })
+  const topRight = editor.pageToScreen({ x: bounds.maxX, y: bounds.minY })
+  const centerX  = (topLeft.x + topRight.x) / 2
+  const top      = Math.max(8, topLeft.y - 52)
+
+  const types = new Set(shapes.map(s => s.type))
+  const hasFill  = types.has('text') || types.has('note') || types.has('geo') || types.has('draw') || types.has('arrow')
+  const hasAlign = types.has('text') || types.has('note') || types.has('geo')
+
+  const currentColor = editor.getStyleForNextShape(DefaultColorStyle)
+  const currentSize  = editor.getStyleForNextShape(DefaultSizeStyle)
+  const currentFill  = editor.getStyleForNextShape(DefaultFillStyle) as FillStyle
+  const currentAlign = editor.getStyleForNextShape(DefaultTextAlignStyle) as AlignStyle
+
+  const setColor = (color: TLDefaultColorStyle) => {
     editor.setStyleForNextShapes(DefaultColorStyle, color)
     editor.setStyleForSelectedShapes(DefaultColorStyle, color)
   }
-
-  const pickSize = (size: TLDefaultSizeStyle, extra: number) => {
+  const setSize = (size: TLDefaultSizeStyle) => {
     editor.setStyleForNextShapes(DefaultSizeStyle, size)
     editor.setStyleForSelectedShapes(DefaultSizeStyle, size)
-    onStrokeExtraChange(extra)
+  }
+  const setFill = (fill: FillStyle) => {
+    editor.setStyleForNextShapes(DefaultFillStyle, fill)
+    editor.setStyleForSelectedShapes(DefaultFillStyle, fill)
+  }
+  const setAlign = (align: AlignStyle) => {
+    editor.setStyleForNextShapes(DefaultTextAlignStyle, align)
+    editor.setStyleForSelectedShapes(DefaultTextAlignStyle, align)
+  }
+
+  const barStyle = {
+    position: 'absolute' as const,
+    left: centerX,
+    top,
+    transform: 'translateX(-50%)',
+    zIndex: 300,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    background: 'rgba(20, 20, 30, 0.92)',
+    backdropFilter: 'blur(8px)',
+    borderRadius: 10,
+    padding: '4px 12px',
+    boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    pointerEvents: 'all' as const,
+  }
+
+  const rowStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: '4px 0',
+  }
+
+  const dividerStyle = {
+    height: 1,
+    background: 'rgba(255,255,255,0.1)',
+    margin: '0 -12px',
+  }
+
+  const activeBtn = {
+    border: '1.5px solid #818cf8',
+    background: '#4f46e5',
+    color: '#fff',
+    fontWeight: 600,
+  }
+
+  const inactiveBtn = {
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: 'transparent',
+    color: 'rgba(255,255,255,0.65)',
+    fontWeight: 400,
+  }
+
+  const btnBase = {
+    height: 26,
+    borderRadius: 6,
+    fontSize: 11,
+    cursor: 'pointer',
+    padding: '0 8px',
+    transition: 'all 0.1s',
+    fontFamily: 'inherit',
+    minWidth: 34,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   }
 
   return (
-    <div style={{
-      position: 'absolute',
-      bottom: 68,
-      left: '50%',
-      transform: 'translateX(-50%)',
-      zIndex: 300,
-      display: 'flex',
-      alignItems: 'center',
-      gap: 8,
-      background: 'rgba(20, 20, 30, 0.92)',
-      backdropFilter: 'blur(8px)',
-      borderRadius: 10,
-      padding: '6px 12px',
-      boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
-      border: '1px solid rgba(255,255,255,0.08)',
-      pointerEvents: 'all',
-    }}>
-      {/* Color swatches */}
-      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+    <div style={barStyle}>
+      {/* Color row */}
+      <div style={rowStyle}>
         {TLDRAW_COLORS.map(c => (
           <button
             key={c.name}
-            onClick={() => pickColor(c.name)}
+            onClick={() => setColor(c.name)}
             title={c.name}
             style={{
               width: 18,
               height: 18,
               borderRadius: '50%',
               background: c.hex,
-              border: activeColor === c.name
+              border: currentColor === c.name
                 ? '2px solid #818cf8'
                 : c.name === 'white' ? '1px solid rgba(255,255,255,0.3)' : '1.5px solid transparent',
               padding: 0,
               cursor: 'pointer',
               flexShrink: 0,
-              boxShadow: activeColor === c.name ? '0 0 0 2px rgba(129,140,248,0.5)' : 'none',
+              boxShadow: currentColor === c.name ? '0 0 0 2px rgba(129,140,248,0.5)' : 'none',
               transition: 'box-shadow 0.1s',
             }}
           />
         ))}
       </div>
 
-      {/* Divider */}
-      <div style={{ width: 1, height: 22, background: 'rgba(255,255,255,0.12)', flexShrink: 0 }} />
+      <div style={dividerStyle} />
 
-      {/* Size buttons */}
-      <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
-        {SIZE_OPTIONS.map(opt => {
-          const isActive = activeSize === opt.size && strokeExtra === opt.extra
-          return (
+      {/* Size row */}
+      <div style={rowStyle}>
+        {CB_SIZES.map(opt => (
+          <button
+            key={opt.value}
+            onClick={() => setSize(opt.value)}
+            style={{ ...btnBase, ...(currentSize === opt.value ? activeBtn : inactiveBtn) }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {hasFill && <>
+        <div style={dividerStyle} />
+        <div style={rowStyle}>
+          {CB_FILLS.map(opt => (
             <button
-              key={opt.label}
-              onClick={() => pickSize(opt.size, opt.extra)}
-              style={{
-                minWidth: 34,
-                height: 26,
-                borderRadius: 6,
-                border: isActive ? '1.5px solid #818cf8' : '1px solid rgba(255,255,255,0.12)',
-                background: isActive ? '#4f46e5' : 'transparent',
-                color: isActive ? '#fff' : 'rgba(255,255,255,0.65)',
-                fontSize: 11,
-                fontWeight: isActive ? 600 : 400,
-                cursor: 'pointer',
-                padding: '0 6px',
-                transition: 'all 0.1s',
-                fontFamily: 'inherit',
-              }}
+              key={opt.value}
+              onClick={() => setFill(opt.value)}
+              style={{ ...btnBase, ...(currentFill === opt.value ? activeBtn : inactiveBtn) }}
             >
               {opt.label}
             </button>
-          )
-        })}
-      </div>
+          ))}
+        </div>
+      </>}
+
+      {hasAlign && <>
+        <div style={dividerStyle} />
+        <div style={rowStyle}>
+          {CB_ALIGNS.map(opt => (
+            <button
+              key={opt.value}
+              onClick={() => setAlign(opt.value)}
+              title={opt.label}
+              style={{ ...btnBase, ...(currentAlign === opt.value ? activeBtn : inactiveBtn) }}
+            >
+              <opt.Icon size={13} />
+            </button>
+          ))}
+        </div>
+      </>}
     </div>
   )
 }
