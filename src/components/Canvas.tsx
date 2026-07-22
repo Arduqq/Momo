@@ -677,6 +677,14 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
 
   return (
     <div ref={containerRef} style={{ flex: 1, position: 'relative', display: 'flex', overflow: 'hidden' }}>
+      <style>{`
+        .tl-container {
+          --tl-font-draw: var(--momo-font, 'Inter', sans-serif);
+          --tl-font-sans: var(--momo-font, 'Inter', sans-serif);
+          --tl-font-serif: var(--momo-font, 'Inter', sans-serif);
+          --tl-font-mono: var(--momo-font, 'Inter', sans-serif);
+        }
+      `}</style>
       {/* Canvas background */}
       <div style={{
         position: 'absolute', inset: 0, zIndex: 0,
