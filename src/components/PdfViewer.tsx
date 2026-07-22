@@ -9,10 +9,28 @@ import { X, FileText, Download, FolderOpen, Loader2 } from 'lucide-react'
 const SCALE = 1.5
 const COLORS = ['#ffd400', '#5fb236', '#2ea8e5', '#e56060']
 
+// pdfjs v5 positions spans with left/top as percentages of the container and drives
+// font-size + transforms through CSS custom properties. We must supply the rules that
+// pdfjs's own pdf_viewer.css normally provides, adapted to our .pdf-text-layer class.
 const TEXT_LAYER_CSS = `
-  .pdf-text-layer { position: absolute; top: 0; left: 0; overflow: hidden; line-height: 1;
-                    pointer-events: auto; user-select: text; }
-  .pdf-text-layer span, .pdf-text-layer br { color: transparent; white-space: pre; }
+  .pdf-text-layer {
+    position: absolute; top: 0; left: 0; overflow: hidden; line-height: 1;
+    pointer-events: auto; user-select: text;
+    --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+    --min-font-size-inv: calc(1 / var(--min-font-size));
+  }
+  .pdf-text-layer span, .pdf-text-layer br {
+    color: transparent; white-space: pre; cursor: text;
+    position: absolute; transform-origin: 0% 0%;
+  }
+  .pdf-text-layer > :not(.markedContent),
+  .pdf-text-layer .markedContent span:not(.markedContent) {
+    --font-height: 0;
+    font-size: calc(var(--text-scale-factor) * var(--font-height));
+    --scale-x: 1; --rotate: 0deg;
+    transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+  }
+  .pdf-text-layer .markedContent { display: contents; position: static; }
   .pdf-text-layer .endOfContent { display: none; }
 `
 
@@ -324,10 +342,11 @@ function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }
 
       const textDiv = textLayerRef.current
       if (textDiv && !cancelled) {
-        textDiv.style.width = vp.width + 'px'
-        textDiv.style.height = vp.height + 'px'
         textLayerInstance.current?.cancel()
         textDiv.innerHTML = ''
+        // Tell pdfjs how to size the container via its CSS calc:
+        // setLayerDimensions sets width = calc(var(--total-scale-factor) * pageWidthPx)
+        textDiv.style.setProperty('--total-scale-factor', String(SCALE))
         const tl = new TextLayer({ textContentSource: page.streamTextContent(), container: textDiv, viewport: vp })
         textLayerInstance.current = tl
         await tl.render()
