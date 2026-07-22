@@ -8,12 +8,10 @@ import { X, FileText, Download, FolderOpen, Loader2 } from 'lucide-react'
 
 const SCALE = 1.5
 const COLORS = ['#ffd400', '#5fb236', '#2ea8e5', '#e56060']
-const DRAG_THRESHOLD = 4
 
-// Text layer is visual only — pointer-events handled by page container
 const TEXT_LAYER_CSS = `
   .pdf-text-layer { position: absolute; top: 0; left: 0; overflow: hidden; line-height: 1;
-                    pointer-events: none; user-select: none; }
+                    pointer-events: auto; user-select: text; }
   .pdf-text-layer span, .pdf-text-layer br { color: transparent; white-space: pre; }
   .pdf-text-layer .endOfContent { display: none; }
 `
@@ -28,8 +26,6 @@ interface PopoverState {
   pageIndex: number; rects: number[][]; text: string; comment: string; color: string;
   annotationKey?: string; annotationVersion?: number; pageLabel: string;
 }
-
-interface DragState { startX: number; startY: number; endX: number; endY: number }
 
 function parsePosition(raw: string | { pageIndex: number; rects: number[][] }) {
   if (typeof raw === 'string') {
@@ -304,11 +300,7 @@ function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)
   const [viewport, setViewport] = useState<PageViewport | null>(null)
-  // Text items in PDF user-space — the source of truth for selection
-  const textItemsRef = useRef<any[]>([])
   const textLayerInstance = useRef<InstanceType<typeof TextLayer> | null>(null)
-  const [drag, setDrag] = useState<DragState | null>(null)
-  const dragging = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -318,27 +310,17 @@ function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }
       const dpr = window.devicePixelRatio || 1
       const vp = page.getViewport({ scale: SCALE })
 
-      // Canvas render + text content fetch in parallel
-      const [, content] = await Promise.all([
-        (async () => {
-          const canvas = canvasRef.current
-          if (!canvas || cancelled) return
-          canvas.width = Math.round(vp.width * dpr)
-          canvas.height = Math.round(vp.height * dpr)
-          canvas.style.width = vp.width + 'px'
-          canvas.style.height = vp.height + 'px'
-          const ctx = canvas.getContext('2d')!
-          ctx.scale(dpr, dpr)
-          await page.render({ canvasContext: ctx, viewport: vp, canvas }).promise
-        })(),
-        page.getTextContent(),
-      ])
-      if (cancelled) return
+      const canvas = canvasRef.current
+      if (!canvas || cancelled) return
+      canvas.width = Math.round(vp.width * dpr)
+      canvas.height = Math.round(vp.height * dpr)
+      canvas.style.width = vp.width + 'px'
+      canvas.style.height = vp.height + 'px'
+      const ctx = canvas.getContext('2d')!
+      ctx.scale(dpr, dpr)
+      await page.render({ canvasContext: ctx, viewport: vp, canvas }).promise
 
-      // Keep only real text items (skip TextMarkedContent group items)
-      textItemsRef.current = (content as any).items.filter(
-        (item: any) => 'str' in item && item.str.trim().length > 0
-      )
+      if (cancelled) return
 
       const textDiv = textLayerRef.current
       if (textDiv && !cancelled) {
@@ -356,93 +338,45 @@ function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }
     return () => {
       cancelled = true
       textLayerInstance.current?.cancel()
-      // Set canvas dimensions to 0 to immediately release the GPU texture memory.
       const canvas = canvasRef.current
       if (canvas) { canvas.width = 0; canvas.height = 0 }
     }
   }, [pdf, pageIndex])
 
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return
-    const rect = containerRef.current!.getBoundingClientRect()
-    const x = e.clientX - rect.left, y = e.clientY - rect.top
-    dragging.current = true
-    setDrag({ startX: x, startY: y, endX: x, endY: y })
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    e.preventDefault()
-  }
+  const onMouseUp = (e: React.MouseEvent) => {
+    if (!viewport || !containerRef.current) return
+    const selection = window.getSelection()
 
-  const onPointerMove = (e: React.PointerEvent) => {
-    if (!dragging.current) return
-    const rect = containerRef.current!.getBoundingClientRect()
-    setDrag(prev => prev ? { ...prev, endX: e.clientX - rect.left, endY: e.clientY - rect.top } : prev)
-  }
-
-  const onPointerUp = (e: React.PointerEvent) => {
-    if (!dragging.current || !drag || !viewport || !containerRef.current) return
-    dragging.current = false
-    const dragW = Math.abs(drag.endX - drag.startX), dragH = Math.abs(drag.endY - drag.startY)
-    setDrag(null)
-
-    if (dragW < DRAG_THRESHOLD && dragH < DRAG_THRESHOLD) {
-      // Click: check if it hits an existing annotation
+    if (!selection || selection.isCollapsed) {
       const cr = containerRef.current.getBoundingClientRect()
       const [px, py] = viewport.convertToPdfPoint(e.clientX - cr.left, e.clientY - cr.top)
-      const hit = annotations.find(a => a.rects.some(([x1, y1, x2, y2]) => px >= x1 && px <= x2 && py >= y1 && py <= y2))
+      const hit = annotations.find(a =>
+        a.rects.some(([x1, y1, x2, y2]) => px >= x1 && px <= x2 && py >= y1 && py <= y2)
+      )
       if (hit) onAnnotationClick(hit, e.clientX, e.clientY)
       return
     }
 
-    // Convert the drag rectangle from container-space to PDF user-space.
-    // convertToPdfPoint handles the Y-axis flip (PDF Y increases upward).
-    const [p1x, p1y] = viewport.convertToPdfPoint(Math.min(drag.startX, drag.endX), Math.min(drag.startY, drag.endY))
-    const [p2x, p2y] = viewport.convertToPdfPoint(Math.max(drag.startX, drag.endX), Math.max(drag.startY, drag.endY))
-    const selMinX = Math.min(p1x, p2x), selMaxX = Math.max(p1x, p2x)
-    const selMinY = Math.min(p1y, p2y), selMaxY = Math.max(p1y, p2y)
+    const textLayer = textLayerRef.current
+    if (!textLayer || !selection.anchorNode || !textLayer.contains(selection.anchorNode)) {
+      selection.removeAllRanges()
+      return
+    }
 
-    // Hit-test each text item's PDF-space bounding box against the selection.
-    // item.transform = [a, b, c, d, x, y] — x,y are the baseline origin in PDF user-space.
-    // item.width is the run width in the same units.
-    // Height falls back to the font scale |a| when item.height is zero.
-    const hitItems = textItemsRef.current.filter((item: any) => {
-      const [a, , , , x, y] = item.transform
-      const w = item.width
-      const h = item.height > 0 ? item.height : Math.abs(a) || 10
-      return (x + w) > selMinX && x < selMaxX && (y + h) > selMinY && y < selMaxY
-    })
+    const text = selection.toString().replace(/\s+/g, ' ').trim()
+    if (!text) { selection.removeAllRanges(); return }
 
-    if (hitItems.length === 0) return
+    const pdfRects = selectionToPdfRects(selection, containerRef.current, viewport)
+    selection.removeAllRanges()
 
-    // Sort into reading order: top of page first (higher PDF Y), then left to right
-    hitItems.sort((a: any, b: any) => {
-      const ay = a.transform[5], by = b.transform[5]
-      const lineH = (Math.abs(a.transform[0]) || 10) * 0.5
-      if (Math.abs(ay - by) > lineH) return by - ay   // different lines
-      return a.transform[4] - b.transform[4]            // same line, left to right
-    })
-
-    const text = hitItems.map((item: any) => item.str).join(' ').replace(/\s+/g, ' ').trim()
-
-    const pdfRects = hitItems.map((item: any) => {
-      const [a, , , , x, y] = item.transform
-      const h = item.height > 0 ? item.height : Math.abs(a) || 10
-      return [x, y, x + item.width, y + h]
-    })
-
+    if (pdfRects.length === 0) return
     onHighlight(pageIndex, pdfRects, text, e.clientX, e.clientY, String(pageIndex + 1))
   }
 
-  const showDragRect = drag &&
-    (Math.abs(drag.endX - drag.startX) >= DRAG_THRESHOLD || Math.abs(drag.endY - drag.startY) >= DRAG_THRESHOLD)
-  const dragVisual = showDragRect ? {
-    left: Math.min(drag!.startX, drag!.endX), top: Math.min(drag!.startY, drag!.endY),
-    width: Math.abs(drag!.endX - drag!.startX), height: Math.abs(drag!.endY - drag!.startY),
-  } : null
-
   return (
     <div ref={containerRef}
-      style={{ position: 'relative', width: viewport ? viewport.width : 'auto', boxShadow: '0 4px 24px rgba(0,0,0,0.5)', borderRadius: 2, overflow: 'hidden', cursor: 'crosshair', flexShrink: 0, touchAction: 'none' }}
-      onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
+      style={{ position: 'relative', width: viewport ? viewport.width : 'auto', boxShadow: '0 4px 24px rgba(0,0,0,0.5)', borderRadius: 2, overflow: 'hidden', cursor: 'text', flexShrink: 0 }}
+      onMouseUp={onMouseUp}>
 
       <canvas ref={canvasRef} style={{ display: 'block' }} />
 
@@ -463,12 +397,7 @@ function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }
         </div>
       )}
 
-      {/* Drag selection rectangle */}
-      {dragVisual && (
-        <div style={{ position: 'absolute', pointerEvents: 'none', zIndex: 3, border: '1px solid rgba(99,102,241,0.7)', backgroundColor: 'rgba(99,102,241,0.1)', ...dragVisual }} />
-      )}
-
-      {/* Text layer — visual only, no pointer events */}
+      {/* Text layer */}
       <div ref={textLayerRef} className="pdf-text-layer" style={{ zIndex: 2 }} />
     </div>
   )
