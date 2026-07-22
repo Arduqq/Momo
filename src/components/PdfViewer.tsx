@@ -48,6 +48,53 @@ function toAnnotation(z: ZoteroAnnotation): Annotation {
   }
 }
 
+// ─── Highlight utilities ──────────────────────────────────────────────────
+
+function mergeLineRects(rects: number[][]): number[][] {
+  if (rects.length === 0) return []
+  const sorted = [...rects].sort((a, b) => b[1] - a[1])
+  const merged: number[][] = []
+  let cur = [...sorted[0]]
+  for (let i = 1; i < sorted.length; i++) {
+    const r = sorted[i]
+    const lineH = cur[3] - cur[1]
+    const threshold = Math.max(lineH * 0.5, 2)
+    if (Math.abs(r[1] - cur[1]) < threshold) {
+      cur[0] = Math.min(cur[0], r[0])
+      cur[2] = Math.max(cur[2], r[2])
+      cur[1] = Math.min(cur[1], r[1])
+      cur[3] = Math.max(cur[3], r[3])
+    } else {
+      merged.push(cur)
+      cur = [...r]
+    }
+  }
+  merged.push(cur)
+  return merged
+}
+
+function selectionToPdfRects(
+  selection: Selection,
+  container: HTMLElement,
+  viewport: PageViewport,
+): number[][] {
+  const range = selection.getRangeAt(0)
+  const containerRect = container.getBoundingClientRect()
+  const raw = Array.from(range.getClientRects()).filter(r => r.width > 0 && r.height > 0)
+  const pdfRects = raw.map(r => {
+    const [x1, y1] = viewport.convertToPdfPoint(
+      r.left   - containerRect.left,
+      r.top    - containerRect.top,
+    )
+    const [x2, y2] = viewport.convertToPdfPoint(
+      r.right  - containerRect.left,
+      r.bottom - containerRect.top,
+    )
+    return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)]
+  })
+  return mergeLineRects(pdfRects)
+}
+
 // ─── PdfViewer ────────────────────────────────────────────────────────────────
 
 interface PdfViewerProps {
