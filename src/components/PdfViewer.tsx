@@ -13,6 +13,7 @@ const COLORS = ['#ffd400', '#5fb236', '#2ea8e5', '#e56060']
 // font-size + transforms through CSS custom properties. We must supply the rules that
 // pdfjs's own pdf_viewer.css normally provides, adapted to our .pdf-text-layer class.
 const TEXT_LAYER_CSS = `
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   .pdf-text-layer {
     position: absolute; top: 0; left: 0; overflow: hidden; line-height: 1;
     pointer-events: auto; user-select: text;
@@ -270,7 +271,7 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
                 ? 'PDF not found in local Zotero storage.'
                 : error}
             </div>
-            {(error === 'not-found' || error.includes('not')) && resolvedPdfKey.current && (
+            {error === 'not-found' && resolvedPdfKey.current && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
                 {userId && apiKey && (
                   <button onClick={handleDownloadFromZotero} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '9px 18px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
@@ -395,6 +396,9 @@ function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }
   return (
     <div ref={containerRef}
       style={{ position: 'relative', width: viewport ? viewport.width : 'auto', boxShadow: '0 4px 24px rgba(0,0,0,0.5)', borderRadius: 2, overflow: 'hidden', cursor: 'text', flexShrink: 0 }}
+      onPointerDown={e => e.stopPropagation()}
+      onPointerMove={e => e.stopPropagation()}
+      onPointerUp={e => e.stopPropagation()}
       onMouseUp={onMouseUp}>
 
       <canvas ref={canvasRef} style={{ display: 'block' }} />
