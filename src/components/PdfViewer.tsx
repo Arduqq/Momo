@@ -4,7 +4,7 @@ import { TextLayer } from 'pdfjs-dist'
 import { pdfjs } from '../utils/pdfSetup'
 import { ZoteroClient } from '../api/zotero'
 import type { ZoteroAnnotation } from '../api/zotero'
-import { X, FileText } from 'lucide-react'
+import { X, FileText, Download, FolderOpen, Loader2 } from 'lucide-react'
 
 const SCALE = 1.5
 const COLORS = ['#ffd400', '#5fb236', '#2ea8e5', '#e56060']
@@ -60,6 +60,8 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
   const [annotations, setAnnotations] = useState<Annotation[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [downloading, setDownloading] = useState(false)
+  const [reloadCount, setReloadCount] = useState(0)
   const [popover, setPopover] = useState<PopoverState | null>(null)
   const resolvedPdfKey = useRef(initialPdfKey)
   const pdfRef = useRef<PDFDocumentProxy | null>(null)
@@ -81,7 +83,7 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
           zotero.getAnnotations(key).catch(() => [] as ZoteroAnnotation[]),
         ])
         if (cancelled) return
-        if (!pdfData) { setError('PDF file not found in local Zotero storage.'); setLoading(false); return }
+        if (!pdfData) { setError('not-found'); setLoading(false); return }
         const doc = await pdfjs.getDocument({ data: pdfData }).promise
         if (!cancelled) {
           pdfRef.current = doc
@@ -104,7 +106,30 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
       pdfRef.current?.destroy()
       pdfRef.current = null
     }
-  }, [itemKey, initialPdfKey, zotero])
+  }, [itemKey, initialPdfKey, zotero, reloadCount])
+
+  const handleDownloadFromZotero = useCallback(async () => {
+    const key = resolvedPdfKey.current
+    if (!key) return
+    setDownloading(true)
+    try {
+      const result: any = await window.ipcRenderer.invoke('download-zotero-pdf', { userId, apiKey, attachmentKey: key })
+      if (result?.success) {
+        setReloadCount(c => c + 1)
+      } else {
+        setError(result?.error || 'Download failed — the PDF may not be in Zotero file storage.')
+      }
+    } finally {
+      setDownloading(false)
+    }
+  }, [userId, apiKey])
+
+  const handleLocatePdf = useCallback(async () => {
+    const key = resolvedPdfKey.current
+    if (!key) return
+    const ok: boolean = await window.ipcRenderer.invoke('locate-pdf', key)
+    if (ok) setReloadCount(c => c + 1)
+  }, [])
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
@@ -171,8 +196,36 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
       </div>
 
       <div style={{ flex: 1, overflowY: 'auto', padding: '24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
-        {loading && <div style={{ color: '#71717a', fontSize: 13, marginTop: 60 }}>Loading PDF…</div>}
-        {!loading && error && <div style={{ color: '#f87171', fontSize: 13, marginTop: 60, textAlign: 'center', padding: '0 32px' }}>{error}</div>}
+        {(loading || downloading) && (
+          <div style={{ color: '#71717a', fontSize: 13, marginTop: 60, display: 'flex', alignItems: 'center', gap: 8 }}>
+            {downloading && <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
+            {downloading ? 'Downloading from Zotero…' : 'Loading PDF…'}
+          </div>
+        )}
+        {!loading && !downloading && error && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, marginTop: 60, padding: '0 32px', textAlign: 'center', maxWidth: 360 }}>
+            <div style={{ color: '#f87171', fontSize: 13 }}>
+              {error === 'not-found'
+                ? 'PDF not found in local Zotero storage.'
+                : error}
+            </div>
+            {(error === 'not-found' || error.includes('not')) && resolvedPdfKey.current && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, width: '100%' }}>
+                {userId && apiKey && (
+                  <button onClick={handleDownloadFromZotero} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '9px 18px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+                    <Download size={14} /> Download from Zotero
+                  </button>
+                )}
+                <button onClick={handleLocatePdf} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, padding: '9px 18px', borderRadius: 8, border: '1px solid #3f3f46', background: '#27272a', color: '#e4e4e7', cursor: 'pointer', fontSize: 13, fontFamily: 'inherit' }}>
+                  <FolderOpen size={14} /> Locate PDF on disk
+                </button>
+              </div>
+            )}
+            <button onClick={onClose} style={{ padding: '8px 20px', borderRadius: 8, border: '1px solid #3f3f46', background: 'transparent', color: '#71717a', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
+              Back to canvas
+            </button>
+          </div>
+        )}
         {!loading && pdf && Array.from({ length: pdf.numPages }, (_, i) => (
           <PdfPage key={i} pdf={pdf} pageIndex={i}
             annotations={annotations.filter(a => a.pageIndex === i)}
