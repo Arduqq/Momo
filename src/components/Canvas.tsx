@@ -702,7 +702,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
       <Tldraw
         onMount={onMount}
         shapeUtils={customShapeUtils}
-        cameraOptions={{ zoomSteps: [0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8] }}
+        cameraOptions={{ zoomSteps: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8] }}
         components={{ Background: () => null, StylePanel: () => null }}
       />
 
