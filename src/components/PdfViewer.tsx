@@ -345,12 +345,18 @@ function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }
       if (textDiv && !cancelled) {
         textLayerInstance.current?.cancel()
         textDiv.innerHTML = ''
-        // Tell pdfjs how to size the container via its CSS calc:
-        // setLayerDimensions sets width = calc(var(--total-scale-factor) * pageWidthPx)
+        // pdfjs v5 sizes the container via CSS calc/round using these custom properties.
+        // --scale-round-x/y are normally defined on .pdfViewer .page in pdf_viewer.css;
+        // without them, round() returns 0px and the text layer has no hit area.
         textDiv.style.setProperty('--total-scale-factor', String(SCALE))
+        textDiv.style.setProperty('--scale-round-x', '1px')
+        textDiv.style.setProperty('--scale-round-y', '1px')
         const tl = new TextLayer({ textContentSource: page.streamTextContent(), container: textDiv, viewport: vp })
         textLayerInstance.current = tl
         await tl.render()
+        // Override with exact canvas dimensions so text layer and canvas align perfectly.
+        textDiv.style.width = vp.width + 'px'
+        textDiv.style.height = vp.height + 'px'
       }
       if (!cancelled) setViewport(vp)
     }
