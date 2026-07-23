@@ -4,7 +4,7 @@ import { TextLayer } from 'pdfjs-dist'
 import { pdfjs } from '../utils/pdfSetup'
 import { ZoteroClient } from '../api/zotero'
 import type { ZoteroAnnotation } from '../api/zotero'
-import { X, FileText, Download, FolderOpen, Loader2 } from 'lucide-react'
+import { X, FileText, Download, FolderOpen, Loader2, Search, ChevronUp, ChevronDown } from 'lucide-react'
 
 const SCALE = 1.5
 const COLORS = ['#ffd400', '#5fb236', '#2ea8e5', '#e56060']
@@ -33,6 +33,8 @@ const TEXT_LAYER_CSS = `
   }
   .pdf-text-layer .markedContent { display: contents; position: static; }
   .pdf-text-layer .endOfContent { display: none; }
+  .pdf-text-layer .pdf-search-hl { background: rgba(255, 235, 59, 0.55); }
+  .pdf-text-layer .pdf-search-current { background: rgba(255, 145, 0, 0.75); }
 `
 
 interface Annotation {
@@ -128,6 +130,12 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
   const resolvedPdfKey = useRef(initialPdfKey)
   const pdfRef = useRef<PDFDocumentProxy | null>(null)
   const zotero = useMemo(() => new ZoteroClient(userId, apiKey), [userId, apiKey])
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [currentMatchIdx, setCurrentMatchIdx] = useState(0)
+  const [matchCount, setMatchCount] = useState(0)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -195,14 +203,43 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-      // Prevent the native Electron find bar — it renders inside the window frame
-      // and shifts the fixed-position PDF viewer layout.
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') e.preventDefault()
+      if (e.key === 'Escape') {
+        if (searchOpen) { setSearchOpen(false); setSearchQuery('') }
+        else onClose()
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault()
+        setSearchOpen(true)
+        setTimeout(() => searchInputRef.current?.focus(), 0)
+      }
     }
     window.addEventListener('keydown', h)
     return () => window.removeEventListener('keydown', h)
-  }, [onClose])
+  }, [onClose, searchOpen])
+
+  // After query changes, wait for PdfPage highlight effects to settle, then count + scroll.
+  useEffect(() => {
+    if (!searchQuery.trim()) { setMatchCount(0); setCurrentMatchIdx(0); return }
+    const t = setTimeout(() => {
+      const marks = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>('.pdf-search-hl') ?? [])
+      setMatchCount(marks.length)
+      marks.forEach(m => m.classList.remove('pdf-search-current'))
+      if (marks[0]) { marks[0].classList.add('pdf-search-current'); marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' }) }
+      setCurrentMatchIdx(0)
+    }, 60)
+    return () => clearTimeout(t)
+  }, [searchQuery])
+
+  const navigateMatch = useCallback((delta: number) => {
+    const marks = Array.from(scrollRef.current?.querySelectorAll<HTMLElement>('.pdf-search-hl') ?? [])
+    if (!marks.length) return
+    marks.forEach(m => m.classList.remove('pdf-search-current'))
+    const next = ((currentMatchIdx + delta) % marks.length + marks.length) % marks.length
+    marks[next].classList.add('pdf-search-current')
+    marks[next].scrollIntoView({ behavior: 'smooth', block: 'center' })
+    setCurrentMatchIdx(next)
+    setMatchCount(marks.length)
+  }, [currentMatchIdx])
 
   const handleHighlight = useCallback((
     pageIndex: number, pdfRects: number[][], text: string,
@@ -250,6 +287,12 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
         <FileText size={16} color="#6366f1" />
         <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: '#f4f4f5', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
         {pdf && <span style={{ fontSize: 11, color: '#71717a', flexShrink: 0 }}>{pdf.numPages} {pdf.numPages === 1 ? 'page' : 'pages'}</span>}
+        <button onClick={() => { setSearchOpen(s => !s); if (!searchOpen) setTimeout(() => searchInputRef.current?.focus(), 0) }}
+          title="Find in PDF (⌘F)" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: searchOpen ? '#6366f1' : '#71717a', padding: '6px 8px', display: 'flex', alignItems: 'center', borderRadius: 6, minWidth: 32, justifyContent: 'center' }}
+          onMouseEnter={e => { e.currentTarget.style.color = '#f4f4f5'; e.currentTarget.style.backgroundColor = '#27272a' }}
+          onMouseLeave={e => { e.currentTarget.style.color = searchOpen ? '#6366f1' : '#71717a'; e.currentTarget.style.backgroundColor = 'transparent' }}>
+          <Search size={16} />
+        </button>
         <button onClick={onClose} title="Close (Esc)" style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: '#71717a', padding: '6px 8px', display: 'flex', alignItems: 'center', borderRadius: 6, minWidth: 32, justifyContent: 'center' }}
           onMouseEnter={e => { e.currentTarget.style.color = '#f4f4f5'; e.currentTarget.style.backgroundColor = '#27272a' }}
           onMouseLeave={e => { e.currentTarget.style.color = '#71717a'; e.currentTarget.style.backgroundColor = 'transparent' }}>
@@ -257,7 +300,40 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
         </button>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', padding: '24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
+      {searchOpen && (
+        <div style={{ flexShrink: 0, height: 44, display: 'flex', alignItems: 'center', gap: 8, padding: '0 16px', backgroundColor: '#1c1c1f', borderBottom: '1px solid #2e2e33' }}>
+          <Search size={14} color="#6366f1" style={{ flexShrink: 0 }} />
+          <input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={e => { setSearchQuery(e.target.value); setCurrentMatchIdx(0) }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.preventDefault(); navigateMatch(e.shiftKey ? -1 : 1) }
+              if (e.key === 'Escape') { setSearchOpen(false); setSearchQuery('') }
+              e.stopPropagation()
+            }}
+            placeholder="Find in PDF…"
+            style={{ flex: 1, minWidth: 0, background: '#27272a', border: '1px solid #3f3f46', borderRadius: 6, color: '#f4f4f5', fontSize: 13, padding: '5px 10px', outline: 'none', fontFamily: 'inherit' }}
+          />
+          <span style={{ fontSize: 12, color: searchQuery.trim() && matchCount === 0 ? '#f87171' : '#71717a', whiteSpace: 'nowrap', flexShrink: 0 }}>
+            {searchQuery.trim() ? (matchCount === 0 ? 'No results' : `${currentMatchIdx + 1} of ${matchCount}`) : ''}
+          </span>
+          <button onClick={() => navigateMatch(-1)} disabled={matchCount === 0} title="Previous (Shift+Enter)"
+            style={{ flexShrink: 0, border: 'none', background: 'none', cursor: matchCount ? 'pointer' : 'default', color: matchCount ? '#a1a1aa' : '#3f3f46', padding: '4px', display: 'flex', borderRadius: 4 }}>
+            <ChevronUp size={16} />
+          </button>
+          <button onClick={() => navigateMatch(1)} disabled={matchCount === 0} title="Next (Enter)"
+            style={{ flexShrink: 0, border: 'none', background: 'none', cursor: matchCount ? 'pointer' : 'default', color: matchCount ? '#a1a1aa' : '#3f3f46', padding: '4px', display: 'flex', borderRadius: 4 }}>
+            <ChevronDown size={16} />
+          </button>
+          <button onClick={() => { setSearchOpen(false); setSearchQuery('') }} title="Close (Esc)"
+            style={{ flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer', color: '#71717a', padding: '4px', display: 'flex', borderRadius: 4 }}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '24px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16 }}>
         {(loading || downloading) && (
           <div style={{ color: '#71717a', fontSize: 13, marginTop: 60, display: 'flex', alignItems: 'center', gap: 8 }}>
             {downloading && <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} />}
@@ -291,6 +367,7 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
         {!loading && pdf && Array.from({ length: pdf.numPages }, (_, i) => (
           <PdfPage key={i} pdf={pdf} pageIndex={i}
             annotations={annotations.filter(a => a.pageIndex === i)}
+            searchQuery={searchQuery}
             onHighlight={handleHighlight} onAnnotationClick={handleAnnotationClick} />
         ))}
       </div>
@@ -310,11 +387,12 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
 
 interface PdfPageProps {
   pdf: PDFDocumentProxy; pageIndex: number; annotations: Annotation[];
+  searchQuery: string;
   onHighlight: (pageIndex: number, pdfRects: number[][], text: string, clientX: number, clientY: number, pageLabel: string) => void;
   onAnnotationClick: (ann: Annotation, clientX: number, clientY: number) => void;
 }
 
-function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }: PdfPageProps) {
+function PdfPage({ pdf, pageIndex, annotations, searchQuery, onHighlight, onAnnotationClick }: PdfPageProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)
@@ -368,6 +446,40 @@ function PdfPage({ pdf, pageIndex, annotations, onHighlight, onAnnotationClick }
       if (canvas) { canvas.width = 0; canvas.height = 0 }
     }
   }, [pdf, pageIndex])
+
+  // Apply search highlights whenever the query or viewport (text layer) changes.
+  useEffect(() => {
+    const textLayer = textLayerRef.current
+    if (!textLayer || !viewport) return
+
+    textLayer.querySelectorAll<HTMLElement>('.pdf-search-hl').forEach(el =>
+      el.classList.remove('pdf-search-hl', 'pdf-search-current')
+    )
+
+    const query = searchQuery.trim()
+    if (!query) return
+
+    // Build a character-position map across all text spans so multi-span phrases match.
+    const spans = Array.from(textLayer.querySelectorAll<HTMLElement>('span:not(.markedContent):not(.endOfContent)'))
+    let pageText = ''
+    const spanMeta: { start: number; end: number; el: HTMLElement }[] = []
+    for (const span of spans) {
+      const text = span.textContent ?? ''
+      spanMeta.push({ start: pageText.length, end: pageText.length + text.length, el: span })
+      pageText += text
+    }
+
+    const queryLower = query.toLowerCase()
+    const pageLower = pageText.toLowerCase()
+    let pos = pageLower.indexOf(queryLower)
+    while (pos !== -1) {
+      const matchEnd = pos + query.length
+      for (const meta of spanMeta) {
+        if (meta.start < matchEnd && meta.end > pos) meta.el.classList.add('pdf-search-hl')
+      }
+      pos = pageLower.indexOf(queryLower, pos + 1)
+    }
+  }, [searchQuery, viewport])
 
   const onMouseUp = (e: React.MouseEvent) => {
     if (!viewport || !containerRef.current) return
