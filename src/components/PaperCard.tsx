@@ -32,7 +32,7 @@ const THUMB_H = 130;
 function PaperCardInner({ shape }: { shape: any }) {
   const editor = useEditor()
   const { title, authors, year, thumbnail, read, citeKey } = shape.props;
-  const firstAuthor = authors?.split(',')?.[0]?.trim() ?? '';
+  const firstAuthor = authors?.split(/[;,]/)?.[0]?.trim() ?? '';
   const meta = [firstAuthor, year].filter(Boolean).join(' · ');
 
   const toggleRead = (e: React.MouseEvent) => {
@@ -178,6 +178,7 @@ export class PaperCardShapeUtil extends BaseBoxShapeUtil<any> {
       thumbnail: '',
       read: false,
       citeKey: '',
+      noteKey: '',
     }
   }
 

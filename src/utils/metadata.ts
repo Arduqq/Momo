@@ -105,7 +105,7 @@ export function metadataToPaperProps(meta: PaperMetadata, itemKey = '') {
     .filter(c => c.creatorType === 'author')
     .map(c => [c.lastName, c.firstName].filter(Boolean).join(', '))
     .filter(Boolean)
-    .join(', ')
+    .join('; ')
   return {
     title: meta.title,
     authors,

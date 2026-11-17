@@ -107,6 +107,12 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
           <p style={{ fontSize: '11px', color: '#888', marginTop: '8px', lineHeight: '1.4' }}>
             Your credentials are saved locally on your MacBook.
           </p>
+          <button
+            onClick={() => window.ipcRenderer.invoke('open-backups-folder')}
+            style={{ border: 'none', background: 'none', color: '#6366f1', fontSize: '12px', cursor: 'pointer', padding: 0, textAlign: 'left' }}
+          >
+            Open automatic backups folder (daily, last 7)
+          </button>
         </div>
       </div>
     </div>,

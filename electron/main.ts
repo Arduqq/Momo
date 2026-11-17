@@ -14,6 +14,27 @@ const store = new Store()
 
 app.setName('Momo')
 
+// Rolling daily backup of the whole store (workspaces, notes, settings). Keeps 7.
+function backupStore() {
+  try {
+    const src = store.path
+    if (!fs.existsSync(src)) return
+    const dir = path.join(path.dirname(src), 'backups')
+    fs.mkdirSync(dir, { recursive: true })
+    const dest = path.join(dir, `config-${new Date().toISOString().slice(0, 10)}.json`)
+    if (!fs.existsSync(dest)) fs.copyFileSync(src, dest)
+    const old = fs.readdirSync(dir).filter(f => /^config-\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().slice(0, -7)
+    old.forEach(f => fs.unlinkSync(path.join(dir, f)))
+  } catch (e: any) {
+    console.error('[backup] failed:', e?.message)
+  }
+}
+backupStore()
+
+ipcMain.handle('open-backups-folder', () => {
+  shell.openPath(path.join(path.dirname(store.path), 'backups'))
+})
+
 // The built directory structure
 //
 // ├─┬─┬ dist
@@ -43,6 +64,8 @@ ipcMain.handle('get-workspaces', () => {
 })
 
 ipcMain.handle('save-workspace', (_event, id, data) => {
+  const known: any[] = store.get('workspaces', []) as any[]
+  if (!known.some(w => w.id === id)) return false // workspace was deleted; don't re-create its data
   store.set(`workspace-data-${id}`, data)
   // Update last modified in list
   const workspaces: any[] = store.get('workspaces', []) as any[]
@@ -106,7 +129,14 @@ ipcMain.handle('save-bib-file', async (_event, content: string, defaultName: str
 })
 
 ipcMain.handle('open-external', (_event, url: string) => {
-  shell.openExternal(url)
+  try {
+    const { protocol } = new URL(url)
+    if (!['http:', 'https:', 'mailto:', 'file:'].includes(protocol)) return false
+    shell.openExternal(url)
+    return true
+  } catch {
+    return false
+  }
 })
 
 function zoteroStorageDir(attachmentKey: string) {
@@ -164,6 +194,7 @@ ipcMain.handle('pick-background-image', async () => {
 
 ipcMain.handle('read-image-file', (_event, filePath: string) => {
   try {
+    if (!/\.(png|jpe?g|webp)$/i.test(filePath)) return null
     const buffer = fs.readFileSync(filePath)
     const ext = path.extname(filePath).toLowerCase()
     const mime = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
@@ -173,8 +204,11 @@ ipcMain.handle('read-image-file', (_event, filePath: string) => {
   }
 })
 
+const FETCH_MAX_BYTES = 2 * 1024 * 1024
+
 ipcMain.handle('fetch-url', async (_event, url: string) => {
   try {
+    if (!/^https?:\/\//i.test(url)) return null
     const { default: https } = await import('node:https')
     const { default: http } = await import('node:http')
     const mod: any = url.startsWith('https:') ? https : http
@@ -182,7 +216,10 @@ ipcMain.handle('fetch-url', async (_event, url: string) => {
       const req = mod.get(url, { headers: { 'User-Agent': 'Momo/1.0' } }, (res: any) => {
         let body = ''
         res.setEncoding('utf8')
-        res.on('data', (chunk: string) => { body += chunk })
+        res.on('data', (chunk: string) => {
+          body += chunk
+          if (body.length > FETCH_MAX_BYTES) { req.destroy(); resolve({ status: res.statusCode ?? 200, body: body.slice(0, FETCH_MAX_BYTES) }) }
+        })
         res.on('end', () => resolve({ status: res.statusCode ?? 200, body }))
       })
       req.on('error', () => resolve(null))

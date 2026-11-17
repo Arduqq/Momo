@@ -152,6 +152,52 @@ export class ZoteroClient {
     );
   }
 
+  // Create or update the Momo-managed child note under `parentKey`.
+  // Returns the note key (new if the old one was deleted in Zotero).
+  async saveNote(parentKey: string, noteKey: string, html: string): Promise<string> {
+    if (noteKey) {
+      try {
+        const current = await axios.get(`${this.baseUrl}/users/${this.userId}/items/${noteKey}`, { headers: this.headers });
+        await axios.patch(
+          `${this.baseUrl}/users/${this.userId}/items/${noteKey}`,
+          { note: html },
+          { headers: { ...this.headers, 'Content-Type': 'application/json', 'If-Unmodified-Since-Version': current.data.version } },
+        );
+        return noteKey;
+      } catch (err: any) {
+        if (err?.response?.status !== 404) throw err;
+        // Note was deleted in Zotero — fall through and create a fresh one.
+      }
+    }
+    const resp = await axios.post(
+      `${this.baseUrl}/users/${this.userId}/items`,
+      [{ itemType: 'note', parentItem: parentKey, note: html, tags: [{ tag: 'momo' }] }],
+      { headers: { ...this.headers, 'Content-Type': 'application/json' } },
+    );
+    const key = resp.data.successful?.['0']?.key;
+    if (!key) throw new Error('Zotero saveNote failed: ' + JSON.stringify(resp.data.failed ?? {}));
+    return key;
+  }
+
+  // Find an existing top-level item by DOI (or arXiv URL) so imports don't create duplicates.
+  async findExistingItem(opts: { doi?: string; url?: string }): Promise<string> {
+    const needle = (opts.doi || opts.url || '').trim()
+    if (!needle) return ''
+    try {
+      const resp = await axios.get(`${this.baseUrl}/users/${this.userId}/items/top`, {
+        params: { q: needle, qmode: 'everything', format: 'json', limit: 10 },
+        headers: this.headers,
+      })
+      const norm = (s?: string) => (s ?? '').trim().toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, '')
+      const hit = (resp.data as ZoteroItem[]).find(i =>
+        (opts.doi && norm((i.data as any).DOI) === norm(opts.doi)) ||
+        (opts.url && norm((i.data as any).url) === norm(opts.url)))
+      return hit?.key ?? ''
+    } catch {
+      return '' // dedupe is best-effort; never block an import
+    }
+  }
+
   async createItem(data: Record<string, any>): Promise<string> {
     const resp = await axios.post(
       `${this.baseUrl}/users/${this.userId}/items`,

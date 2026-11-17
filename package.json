@@ -15,7 +15,8 @@
     "release:mac": "npm run build && electron-builder --mac --publish always",
     "release:win": "npm run build && electron-builder --win --publish always",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "build": {
     "appId": "com.momo.research",
@@ -118,6 +119,7 @@
     "vite": "^8.0.9",
     "vite-plugin-electron": "^0.29.1",
     "vite-plugin-electron-renderer": "^0.14.6",
+    "vitest": "^4.1.12",
     "wait-on": "^9.0.5"
   }
 }

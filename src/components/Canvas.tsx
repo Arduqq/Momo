@@ -5,7 +5,7 @@ import { PaperCardShapeUtil } from './PaperCard'
 import { LinkCardShapeUtil, LINK_W, LINK_H } from './LinkCard'
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { generateThumbnail } from '../utils/pdfThumbnail'
-import { generateBibEntry, makeCiteKey, assembleBibFile } from '../utils/bibtex'
+import { generateBibEntry, makeCiteKey, assembleBibFile, parseAuthorString, buildNoteHtml } from '../utils/bibtex'
 import { ZoteroClient } from '../api/zotero'
 import type { ZoteroAnnotation } from '../api/zotero'
 import {
@@ -100,6 +100,7 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
   const [editor, setEditor] = useState<Editor | null>(null)
   const [pinnedCard, setPinnedCard] = useState<SelectedCard | null>(null)
   const [pdfOpen, setPdfOpen] = useState<{ itemKey: string; pdfKey: string; title: string } | null>(null)
+  const [pdfClosedTick, setPdfClosedTick] = useState(0)
   const containerRef = useRef<HTMLDivElement>(null)
   const lastPlacedKeysRef = useRef<Set<string>>(new Set())
   const lastSelectedIdRef = useRef<string | null>(null)
@@ -314,11 +315,15 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
   // Auto-save
   useEffect(() => {
     if (!editor || !workspaceId) return
+    let dirty = false
+    const unlisten = editor.store.listen(() => { dirty = true }, { scope: 'document', source: 'user' })
     const saveNow = () => {
+      if (!dirty) return
+      dirty = false
       window.ipcRenderer.invoke('save-workspace', workspaceId, editor.getSnapshot())
     }
     const t = setInterval(saveNow, 5000)
-    return () => { clearInterval(t); saveNow() }
+    return () => { clearInterval(t); unlisten(); saveNow() }
   }, [editor, workspaceId])
 
   // Capture-phase drop handler (bypasses tldraw's internal drag handling)
@@ -377,8 +382,14 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
                   ...(meta.proceedingsTitle ? { proceedingsTitle: meta.proceedingsTitle } : {}),
                 }
               : { itemType: 'document', title: file.name.replace(/\.pdf$/i, ''), creators: [] }
-            itemKey = await zotero.createItem(itemData)
-            attachmentKey = await zotero.createAttachment(itemKey, file.name)
+            const existing = await zotero.findExistingItem({ doi: meta?.DOI })
+            if (existing) {
+              itemKey = existing
+              attachmentKey = await zotero.getPdfAttachmentKey(existing)
+            } else {
+              itemKey = await zotero.createItem(itemData)
+            }
+            if (!attachmentKey) attachmentKey = await zotero.createAttachment(itemKey, file.name)
             // Send file data via IPC (file.path unavailable in sandboxed renderers)
             await window.ipcRenderer.invoke('import-pdf', { fileData: new Uint8Array(buf), attachmentKey, filename: file.name })
           } catch (err) {
@@ -485,7 +496,8 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
               if (meta && userId && apiKey) {
                 try {
                   const zotero = new ZoteroClient(userId, apiKey)
-                  itemKey = await zotero.createItem({
+                  itemKey = await zotero.findExistingItem({ doi: meta.DOI, url: meta.url })
+                  if (!itemKey) itemKey = await zotero.createItem({
                     itemType: meta.itemType,
                     title: meta.title,
                     creators: meta.creators,
@@ -562,7 +574,7 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
       let key = shapeCiteKey?.trim()
       if (!key) {
         key = item ? makeCiteKey(item, usedKeys) : makeCiteKey(
-          { data: { creators: authors ? [{ lastName: authors.split(',')[0].trim() }] : [], date: year } },
+          { data: { creators: parseAuthorString(authors).slice(0, 1), date: year } },
           usedKeys,
         )
       } else {
@@ -582,9 +594,7 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
           data: {
             itemType: venue ? 'journalArticle' : 'misc',
             title, date: year,
-            creators: authors
-              ? authors.split(',').map((n: string) => ({ lastName: n.trim(), creatorType: 'author' }))
-              : [],
+            creators: parseAuthorString(authors),
             publicationTitle: venue,
             abstractNote: abstract,
           }
@@ -628,11 +638,44 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
     }
   }, [editor, copyState, buildBibContent])
 
+  // Debounced write-back of notes to a Zotero child note.
+  const [noteSync, setNoteSync] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const noteTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  useEffect(() => {
+    const timers = noteTimers.current
+    return () => { timers.forEach(clearTimeout); timers.clear() }
+  }, [workspaceId])
+
+  const scheduleNoteSync = useCallback((id: string) => {
+    if (!editor || !userId || !apiKey) return
+    const existing = noteTimers.current.get(id)
+    if (existing) clearTimeout(existing)
+    setNoteSync('saving')
+    noteTimers.current.set(id, setTimeout(async () => {
+      noteTimers.current.delete(id)
+      const shape = editor.getShape(id as any) as any
+      const p = shape?.props
+      if (!p?.itemKey) { setNoteSync('idle'); return }
+      if (!p.noteKey && !p.contribution?.trim() && !p.relationship?.trim()) { setNoteSync('idle'); return }
+      try {
+        const zotero = new ZoteroClient(userId, apiKey)
+        const noteKey = await zotero.saveNote(p.itemKey, p.noteKey ?? '', buildNoteHtml(p.contribution ?? '', p.relationship ?? ''))
+        if (noteKey !== p.noteKey) editor.updateShape({ id: shape.id, type: 'paper-card', props: { noteKey } } as any)
+        setNoteSync('saved')
+      } catch (err) {
+        console.warn('[note sync] failed:', err)
+        setNoteSync('error')
+      }
+    }, 1500))
+  }, [editor, userId, apiKey])
+
   const updateCard = useCallback((id: string, props: Partial<SelectedCard['props']>) => {
     if (!editor) return
     editor.updateShape({ id, type: 'paper-card', props } as any)
     setPinnedCard(prev => prev && prev.id === id ? { ...prev, props: { ...prev.props, ...props } } : prev)
-  }, [editor])
+    if ('contribution' in props || 'relationship' in props) scheduleNoteSync(id)
+  }, [editor, scheduleNoteSync])
 
   const handleCiteWebSubmit = useCallback((data: WebCiteData) => {
     if (!editor) return
@@ -707,7 +750,7 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
           title={pdfOpen.title}
           userId={userId}
           apiKey={apiKey}
-          onClose={() => setPdfOpen(null)}
+          onClose={() => { setPdfOpen(null); setPdfClosedTick(t => t + 1) }}
         />
       )}
 
@@ -740,6 +783,8 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
             })}
             userId={userId}
             apiKey={apiKey}
+            noteSync={pinnedCard.props.itemKey ? noteSync : 'idle'}
+            refreshSignal={pdfClosedTick}
           />
         )}
       </div>
@@ -881,13 +926,15 @@ export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKey
   )
 }
 
-function DetailPanel({ card, onUpdate, onClose, onOpenPdf, userId, apiKey }: {
+function DetailPanel({ card, onUpdate, onClose, onOpenPdf, userId, apiKey, noteSync, refreshSignal }: {
   card: SelectedCard;
   onUpdate: (props: Partial<SelectedCard['props']>) => void;
   onClose: () => void;
   onOpenPdf: () => void;
   userId: string;
   apiKey: string;
+  noteSync: 'idle' | 'saving' | 'saved' | 'error';
+  refreshSignal: number;
 }) {
   const { title, authors, year, venue, contribution, relationship, abstract, read, citeKey } = card.props;
   const [annotations, setAnnotations] = useState<ZoteroAnnotation[]>([]);
@@ -909,7 +956,7 @@ function DetailPanel({ card, onUpdate, onClose, onOpenPdf, userId, apiKey }: {
         if (!pdfKey || cancelled) { setAnnotationsLoading(false); return; }
         const annots = await client.getAnnotations(pdfKey);
         if (!cancelled) {
-          setAnnotations(annots.filter(a => a.data.annotationText?.trim()));
+          setAnnotations(annots.filter(a => a.data.annotationText?.trim() || a.data.annotationComment?.trim()));
           setAnnotationsLoading(false);
         }
       } catch {
@@ -917,7 +964,7 @@ function DetailPanel({ card, onUpdate, onClose, onOpenPdf, userId, apiKey }: {
       }
     })();
     return () => { cancelled = true; };
-  }, [card.id, card.props.pdfKey, card.props.itemKey, userId, apiKey, client, refreshTick]);
+  }, [card.id, card.props.pdfKey, card.props.itemKey, userId, apiKey, client, refreshTick, refreshSignal]);
 
   return (
     <div style={{
@@ -1063,6 +1110,14 @@ function DetailPanel({ card, onUpdate, onClose, onOpenPdf, userId, apiKey }: {
           onChange={v => onUpdate({ relationship: v })}
         />
 
+        {noteSync !== 'idle' && (
+          <div style={{ fontSize: 11, marginTop: -8, color: noteSync === 'error' ? '#dc2626' : '#9ca3af' }}>
+            {noteSync === 'saving' ? 'Saving note to Zotero…'
+              : noteSync === 'saved' ? 'Note synced to Zotero'
+              : 'Could not sync note to Zotero — will retry on next edit'}
+          </div>
+        )}
+
         {/* Highlights */}
         <div>
           <div style={{
@@ -1120,9 +1175,11 @@ function DetailPanel({ card, onUpdate, onClose, onOpenPdf, userId, apiKey }: {
                 borderLeftWidth: '3px',
                 borderLeftColor: a.data.annotationColor || '#ffd400',
               }}>
-                <div style={{ fontSize: '12.5px', color: '#374151', lineHeight: '1.55', fontStyle: 'italic' }}>
-                  "{a.data.annotationText}"
-                </div>
+                {a.data.annotationText?.trim() && (
+                  <div style={{ fontSize: '12.5px', color: '#374151', lineHeight: '1.55', fontStyle: 'italic' }}>
+                    "{a.data.annotationText}"
+                  </div>
+                )}
                 {a.data.annotationPageLabel && (
                   <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '3px' }}>
                     p. {a.data.annotationPageLabel}

@@ -26,8 +26,30 @@ function formatAuthors(creators: any[]): string {
     .join(' and ')
 }
 
+// Escape characters that are special in LaTeX so titles like "R&D_100 50%" compile.
+export function escapeLatex(s: string): string {
+  return s
+    .replace(/\\/g, ' ')
+    .replace(/([&%$#_])/g, '\\$1')
+}
+
 // Wrap in braces to protect capitalisation; strip any existing braces first.
-function b(s: string) { return `{${s.replace(/[{}]/g, '')}}` }
+function b(s: string) { return `{${escapeLatex(s.replace(/[{}]/g, ''))}}` }
+
+// Parse the free-text author string stored on canvas cards into creators.
+//  - "Last, First; Last, First"  (cite-web modal, DOI/arXiv drops)
+//  - "Last, Last, Last"          (sidebar drags: last names only)
+export function parseAuthorString(authors: string): Array<{ lastName: string; firstName?: string; creatorType: string }> {
+  const text = (authors ?? '').trim()
+  if (!text) return []
+  if (text.includes(';')) {
+    return text.split(';').map(p => p.trim()).filter(Boolean).map(p => {
+      const [last, ...rest] = p.split(',')
+      return { lastName: last.trim(), firstName: rest.join(',').trim() || undefined, creatorType: 'author' }
+    })
+  }
+  return text.split(',').map(p => p.trim()).filter(Boolean).map(p => ({ lastName: p, creatorType: 'author' }))
+}
 
 function pages(p?: string) {
   return p ? p.replace(/\u2013|\u2014|-(?!-)/g, '--') : ''
@@ -119,6 +141,18 @@ export function makeCiteKey(item: any, used: Set<string>): string {
     if (!used.has(k)) { used.add(k); return k }
   }
   return base
+}
+
+function htmlEscape(s: string) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>')
+}
+
+// HTML body for the Momo-managed Zotero child note.
+export function buildNoteHtml(contribution: string, relationship: string): string {
+  return '<h1>Momo notes</h1>' +
+    `<h2>What is their contribution?</h2><p>${htmlEscape(contribution.trim()) || '<em>—</em>'}</p>` +
+    `<h2>How is it relevant?</h2><p>${htmlEscape(relationship.trim()) || '<em>—</em>'}</p>` +
+    '<p><em>Synced from Momo — edits made here are overwritten by the next sync.</em></p>'
 }
 
 export function assembleBibFile(entries: string[], workspaceName: string): string {
