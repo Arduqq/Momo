@@ -3,6 +3,7 @@ import pkg from 'electron-updater'
 const { autoUpdater } = pkg
 import path from 'node:path'
 import fs from 'node:fs'
+import https from 'node:https'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import Store from 'electron-store'
@@ -172,6 +173,95 @@ ipcMain.handle('read-image-file', (_event, filePath: string) => {
   }
 })
 
+ipcMain.handle('fetch-url', async (_event, url: string) => {
+  try {
+    const { default: https } = await import('node:https')
+    const { default: http } = await import('node:http')
+    const mod: any = url.startsWith('https:') ? https : http
+    return await new Promise<{ status: number; body: string } | null>((resolve) => {
+      const req = mod.get(url, { headers: { 'User-Agent': 'Momo/1.0' } }, (res: any) => {
+        let body = ''
+        res.setEncoding('utf8')
+        res.on('data', (chunk: string) => { body += chunk })
+        res.on('end', () => resolve({ status: res.statusCode ?? 200, body }))
+      })
+      req.on('error', () => resolve(null))
+      req.setTimeout(8000, () => { req.destroy(); resolve(null) })
+    })
+  } catch {
+    return null
+  }
+})
+
+ipcMain.handle('import-pdf', (_event, { srcPath, fileData, attachmentKey, filename }: { srcPath?: string; fileData?: Uint8Array; attachmentKey: string; filename: string }) => {
+  try {
+    const destDir = zoteroStorageDir(attachmentKey)
+    fs.mkdirSync(destDir, { recursive: true })
+    if (fileData) {
+      fs.writeFileSync(path.join(destDir, filename), Buffer.from(fileData))
+    } else if (srcPath) {
+      fs.copyFileSync(srcPath, path.join(destDir, filename))
+    }
+    return true
+  } catch (e: any) {
+    console.error('[import-pdf]', e?.message)
+    return false
+  }
+})
+
+ipcMain.handle('download-zotero-pdf', async (_event, { userId, apiKey, attachmentKey }: { userId: string; apiKey: string; attachmentKey: string }) => {
+  try {
+    const { default: https } = await import('node:https')
+    const { default: http } = await import('node:http')
+
+    // Fetch attachment metadata to get the filename
+    const metaBody: string = await new Promise((resolve, reject) => {
+      const req = https.get(
+        `https://api.zotero.org/users/${userId}/items/${attachmentKey}`,
+        { headers: { 'Zotero-API-Key': apiKey } },
+        (res: any) => {
+          let body = ''
+          res.setEncoding('utf8')
+          res.on('data', (chunk: string) => { body += chunk })
+          res.on('end', () => resolve(body))
+        }
+      )
+      req.on('error', reject)
+      req.setTimeout(8000, () => { req.destroy(); reject(new Error('Timeout fetching metadata')) })
+    })
+    const meta = JSON.parse(metaBody)
+    const filename: string = meta?.data?.filename || `${attachmentKey}.pdf`
+
+    // Download the file, following redirects (Zotero redirects to S3/CDN)
+    const downloadBinary = (url: string, redirectsLeft = 5): Promise<Buffer> =>
+      new Promise((resolve, reject) => {
+        const mod: any = url.startsWith('https:') ? https : http
+        const headers: Record<string, string> = url.includes('api.zotero.org') ? { 'Zotero-API-Key': apiKey } : {}
+        const req = mod.get(url, { headers }, (res: any) => {
+          if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+            if (redirectsLeft <= 0) { reject(new Error('Too many redirects')); return }
+            downloadBinary(res.headers.location, redirectsLeft - 1).then(resolve, reject)
+            return
+          }
+          if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode}`)); return }
+          const chunks: Buffer[] = []
+          res.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)))
+          res.on('end', () => resolve(Buffer.concat(chunks)))
+        })
+        req.on('error', reject)
+        req.setTimeout(60000, () => { req.destroy(); reject(new Error('Download timeout')) })
+      })
+
+    const fileData = await downloadBinary(`https://api.zotero.org/users/${userId}/items/${attachmentKey}/file`)
+    const destDir = zoteroStorageDir(attachmentKey)
+    fs.mkdirSync(destDir, { recursive: true })
+    fs.writeFileSync(path.join(destDir, filename), fileData)
+    return { success: true, filename }
+  } catch (e: any) {
+    return { success: false, error: e?.message ?? 'Unknown error' }
+  }
+})
+
 ipcMain.handle('read-zotero-pdf', (_event, attachmentKey: string) => {
   try {
     const dir = zoteroStorageDir(attachmentKey)
@@ -229,12 +319,65 @@ app.on('activate', () => {
   }
 })
 
-ipcMain.handle('restart-and-update', () => {
+// macOS builds are not signed with a Developer ID, so Squirrel.Mac refuses to
+// install updates in place. On macOS we download the .dmg ourselves and hand it
+// to the user to drag into Applications. Windows uses electron-updater normally.
+const MANUAL_UPDATE = process.platform === 'darwin'
+const RELEASE_BASE = 'https://github.com/Arduqq/Momo/releases/download'
+let latestUpdate: { version: string; fileName: string } | null = null
+let downloadedInstaller: string | null = null
+
+function downloadFile(url: string, dest: string, onProgress: (percent: number) => void, redirectsLeft = 5): Promise<void> {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'Momo-updater' } }, (res) => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode ?? 0) && res.headers.location) {
+        res.resume()
+        if (redirectsLeft <= 0) { reject(new Error('Too many redirects')); return }
+        downloadFile(res.headers.location, dest, onProgress, redirectsLeft - 1).then(resolve, reject)
+        return
+      }
+      if (res.statusCode !== 200) { res.resume(); reject(new Error(`HTTP ${res.statusCode}`)); return }
+      const total = parseInt(res.headers['content-length'] ?? '0', 10)
+      let received = 0
+      const tmp = dest + '.part'
+      const out = fs.createWriteStream(tmp)
+      res.on('data', (chunk: Buffer) => {
+        received += chunk.length
+        if (total) onProgress(Math.round((received / total) * 100))
+      })
+      res.pipe(out)
+      out.on('finish', () => { fs.renameSync(tmp, dest); resolve() })
+      out.on('error', reject)
+      res.on('error', reject)
+    }).on('error', reject)
+  })
+}
+
+ipcMain.handle('restart-and-update', async () => {
+  if (MANUAL_UPDATE) {
+    if (downloadedInstaller) await shell.openPath(downloadedInstaller)
+    app.quit()
+    return
+  }
   autoUpdater.quitAndInstall()
 })
 
-ipcMain.handle('start-update-download', () => {
-  autoUpdater.downloadUpdate()
+ipcMain.handle('start-update-download', async () => {
+  if (!MANUAL_UPDATE) { autoUpdater.downloadUpdate(); return }
+  if (!latestUpdate) return
+  try {
+    const dest = path.join(app.getPath('downloads'), latestUpdate.fileName)
+    await downloadFile(
+      `${RELEASE_BASE}/v${latestUpdate.version}/${latestUpdate.fileName}`,
+      dest,
+      (percent) => win?.webContents.send('update-download-progress', { percent }),
+    )
+    downloadedInstaller = dest
+    win?.webContents.send('update-downloaded', { version: latestUpdate.version, manual: true })
+  } catch (e: any) {
+    console.error('[updater] manual download failed:', e?.message)
+    win?.webContents.send('update-error', { message: e?.message ?? 'Download failed' })
+  }
 })
 
 ipcMain.handle('check-for-updates', () => {
@@ -258,9 +401,11 @@ let pendingUpdateInfo: { version: string; releaseNotes: string } | null = null
 
 function setupAutoUpdater() {
   autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = !MANUAL_UPDATE
 
   autoUpdater.on('update-available', (info) => {
+    const dmg = info.files?.find(f => f.url.toLowerCase().endsWith('.dmg'))?.url ?? info.path
+    latestUpdate = { version: info.version, fileName: path.basename(dmg ?? `Momo-${info.version}-arm64.dmg`) }
     const payload = {
       version: info.version,
       releaseNotes: typeof info.releaseNotes === 'string' ? info.releaseNotes : '',
@@ -282,6 +427,7 @@ function setupAutoUpdater() {
 
   autoUpdater.on('error', (err) => {
     console.error('[auto-updater] error:', err?.message)
+    win?.webContents.send('update-error', { message: err?.message ?? 'Update failed' })
   })
 }
 

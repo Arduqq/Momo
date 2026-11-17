@@ -1,4 +1,11 @@
-const { ipcRenderer, contextBridge } = require('electron')
+const { ipcRenderer, contextBridge, webUtils } = require('electron')
+
+contextBridge.exposeInMainWorld('momoFiles', {
+  // File.path was removed in Electron 32+; this is the supported replacement.
+  pathFor(file) {
+    try { return webUtils.getPathForFile(file) } catch { return '' }
+  },
+})
 
 contextBridge.exposeInMainWorld('ipcRenderer', {
   on(...args) {

@@ -90,12 +90,13 @@ interface SelectedCard {
 
 interface CanvasProps {
   workspaceId: string | null;
+  workspaceName?: string;
   userId: string;
   apiKey: string;
   onPlacedKeysChange: (keys: Set<string>, crossPageItems: Map<string, string[]>) => void;
 }
 
-export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: CanvasProps) => {
+export const Canvas = ({ workspaceId, workspaceName, userId, apiKey, onPlacedKeysChange }: CanvasProps) => {
   const [editor, setEditor] = useState<Editor | null>(null)
   const [pinnedCard, setPinnedCard] = useState<SelectedCard | null>(null)
   const [pdfOpen, setPdfOpen] = useState<{ itemKey: string; pdfKey: string; title: string } | null>(null)
@@ -437,7 +438,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
           if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
             dropPdf(file, e.clientX + i * 20, e.clientY + i * 20)
           } else {
-            const filePath = (file as any).path as string | undefined
+            const filePath = window.momoFiles?.pathFor(file) || undefined
             const url = filePath
               ? (filePath.startsWith('file://') ? filePath : `file://${filePath}`)
               : `file://${file.name}`
@@ -592,9 +593,8 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
       }
     }
 
-    const name = workspaceId ?? 'workspace'
-    return assembleBibFile(entries, name)
-  }, [editor, userId, apiKey, workspaceId])
+    return assembleBibFile(entries, workspaceName || 'workspace')
+  }, [editor, userId, apiKey, workspaceName])
 
   const exportBib = useCallback(async () => {
     if (!editor || exportState === 'busy') return
@@ -602,7 +602,8 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
     try {
       const content = await buildBibContent()
       if (!content) { setExportState('idle'); return }
-      const filename = `${workspaceId ?? 'workspace'}.bib`
+      const safeName = (workspaceName || 'workspace').replace(/[\\/:*?"<>|]+/g, '-').trim() || 'workspace'
+      const filename = `${safeName}.bib`
       await window.ipcRenderer.invoke('save-bib-file', content, filename)
       setExportState('done')
       setTimeout(() => setExportState('idle'), 2000)
@@ -610,7 +611,7 @@ export const Canvas = ({ workspaceId, userId, apiKey, onPlacedKeysChange }: Canv
       console.error('[export-bib]', e)
       setExportState('idle')
     }
-  }, [editor, exportState, buildBibContent, workspaceId])
+  }, [editor, exportState, buildBibContent, workspaceName])
 
   const copyBib = useCallback(async () => {
     if (!editor || copyState === 'busy') return

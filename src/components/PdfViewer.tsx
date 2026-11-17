@@ -264,9 +264,12 @@ export function PdfViewer({ itemKey, pdfKey: initialPdfKey, title, userId, apiKe
   const handleUpdate = useCallback(async (comment: string) => {
     if (!popover?.annotationKey) return
     try {
-      await zotero.updateAnnotationComment(popover.annotationKey, comment, popover.annotationVersion!)
-      setAnnotations(prev => prev.map(a => a.key === popover.annotationKey ? { ...a, comment } : a))
-    } catch (e) { console.error('[PdfViewer] update failed:', e) }
+      const version = await zotero.updateAnnotationComment(popover.annotationKey, comment, popover.annotationVersion!)
+      setAnnotations(prev => prev.map(a => a.key === popover.annotationKey ? { ...a, comment, version } : a))
+    } catch (e) {
+      console.error('[PdfViewer] update failed:', e)
+      window.alert('Could not save the highlight comment to Zotero. Close and reopen the PDF to refresh, then try again.')
+    }
     setPopover(null)
   }, [popover, zotero])
 

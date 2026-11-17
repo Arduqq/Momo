@@ -31,7 +31,8 @@ function App() {
   const [updateState, setUpdateState] = useState<{
     phase: 'idle' | 'available' | 'downloading' | 'ready';
     version: string; releaseNotes: string; percent: number; dismissed: boolean;
-  }>({ phase: 'idle', version: '', releaseNotes: '', percent: 0, dismissed: false })
+    manual: boolean; error: string;
+  }>({ phase: 'idle', version: '', releaseNotes: '', percent: 0, dismissed: false, manual: false, error: '' })
 
   const loadSettings = async () => {
     const id = await window.ipcRenderer.invoke('get-store-value', 'zotero-user-id')
@@ -60,6 +61,8 @@ function App() {
 
   const deleteWorkspace = async (id: string) => {
     if (workspaces.length <= 1) return
+    const name = workspaces.find(w => w.id === id)?.name ?? 'this workspace'
+    if (!window.confirm(`Delete "${name}"? Its canvas, notes and hidden papers will be permanently removed.`)) return
     await window.ipcRenderer.invoke('delete-workspace', id)
     const updated = workspaces.filter(w => w.id !== id)
     setWorkspaces(updated)
@@ -89,8 +92,12 @@ function App() {
     window.ipcRenderer.on('update-download-progress', (_e: any, { percent }: { percent: number }) => {
       setUpdateState(s => ({ ...s, phase: 'downloading', percent }))
     })
-    window.ipcRenderer.on('update-downloaded', (_e: any, info: { version: string }) => {
-      setUpdateState(s => ({ ...s, phase: 'ready', version: info?.version || s.version, percent: 100, dismissed: false }))
+    window.ipcRenderer.on('update-downloaded', (_e: any, info: { version: string; manual?: boolean }) => {
+      setUpdateState(s => ({ ...s, phase: 'ready', version: info?.version || s.version, percent: 100, dismissed: false, manual: !!info?.manual, error: '' }))
+    })
+    window.ipcRenderer.on('update-error', (_e: any, info: { message: string }) => {
+      // Back to "available" so the user can retry instead of staring at a stuck progress bar.
+      setUpdateState(s => s.phase === 'idle' ? s : { ...s, phase: 'available', dismissed: false, error: info?.message || 'Update failed' })
     })
   }, [])
 
@@ -107,8 +114,10 @@ function App() {
             currentVersion={currentVersion}
             releaseNotes={updateState.releaseNotes}
             percent={updateState.percent}
+            manual={updateState.manual}
+            error={updateState.error}
             onUpdate={() => {
-              setUpdateState(s => ({ ...s, phase: 'downloading', percent: 0 }))
+              setUpdateState(s => ({ ...s, phase: 'downloading', percent: 0, error: '' }))
               window.ipcRenderer.invoke('start-update-download')
             }}
             onRestart={() => window.ipcRenderer.invoke('restart-and-update')}
@@ -167,7 +176,7 @@ function App() {
         </header>
 
         <Suspense fallback={null}>
-          <Canvas workspaceId={activeWorkspaceId} userId={userId} apiKey={apiKey} onPlacedKeysChange={handlePlacedKeysChange} />
+          <Canvas workspaceId={activeWorkspaceId} workspaceName={workspaces.find(w => w.id === activeWorkspaceId)?.name} userId={userId} apiKey={apiKey} onPlacedKeysChange={handlePlacedKeysChange} />
         </Suspense>
       </main>
 
@@ -510,9 +519,9 @@ function formatReleaseNotes(notes: string): React.ReactNode {
   })
 }
 
-function UpdateModal({ phase, version, currentVersion, releaseNotes, percent, onUpdate, onRestart, onDismiss }: {
+function UpdateModal({ phase, version, currentVersion, releaseNotes, percent, manual, error, onUpdate, onRestart, onDismiss }: {
   phase: 'available' | 'downloading' | 'ready';
-  version: string; currentVersion: string; releaseNotes: string; percent: number;
+  version: string; currentVersion: string; releaseNotes: string; percent: number; manual: boolean; error: string;
   onUpdate: () => void; onRestart: () => void; onDismiss: () => void;
 }) {
   const font = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
@@ -549,7 +558,9 @@ function UpdateModal({ phase, version, currentVersion, releaseNotes, percent, on
             </div>
             <div style={{ fontSize: 12, color: '#6b7280', marginTop: 3 }}>
               {isReady
-                ? `Momo ${version} has been downloaded and is ready to install.`
+                ? (manual
+                    ? `Momo ${version} is in your Downloads folder. Momo will quit and open the installer — drag Momo into Applications to finish.`
+                    : `Momo ${version} has been downloaded and is ready to install.`)
                 : isDownloading
                 ? 'The update is downloading in the background.'
                 : currentVersion ? `You're on v${currentVersion}` : 'A new version is ready to download.'}
@@ -561,6 +572,12 @@ function UpdateModal({ phase, version, currentVersion, releaseNotes, percent, on
             </button>
           )}
         </div>
+
+        {error && (
+          <div style={{ padding: '10px 24px', fontSize: 12, color: '#b91c1c', backgroundColor: '#fef2f2', borderBottom: '1px solid #fee2e2' }}>
+            Update failed: {error}
+          </div>
+        )}
 
         {/* Release notes */}
         {!isDownloading && releaseNotes && (
@@ -616,7 +633,7 @@ function UpdateModal({ phase, version, currentVersion, releaseNotes, percent, on
             }}
           >
             {isReady
-              ? <><CheckCircle2 size={13} /> Restart &amp; Install</>
+              ? <><CheckCircle2 size={13} /> {manual ? 'Quit & Open Installer' : 'Restart & Install'}</>
               : isDownloading
               ? <><Download size={13} /> Downloading…</>
               : <><Download size={13} /> Update Now</>}

@@ -134,12 +134,15 @@ export class ZoteroClient {
     return result;
   }
 
-  async updateAnnotationComment(annotationKey: string, comment: string, version: number): Promise<void> {
-    await axios.patch(
+  async updateAnnotationComment(annotationKey: string, comment: string, version: number): Promise<number> {
+    const resp = await axios.patch(
       `${this.baseUrl}/users/${this.userId}/items/${annotationKey}`,
       { annotationComment: comment },
       { headers: { ...this.headers, 'Content-Type': 'application/json', 'If-Unmodified-Since-Version': version } },
     );
+    // Zotero returns the item's new version; callers need it for the next write.
+    const next = parseInt(resp.headers['last-modified-version'] ?? '', 10);
+    return Number.isNaN(next) ? version : next;
   }
 
   async deleteAnnotation(annotationKey: string, version: number): Promise<void> {
@@ -147,5 +150,34 @@ export class ZoteroClient {
       `${this.baseUrl}/users/${this.userId}/items/${annotationKey}`,
       { headers: { ...this.headers, 'If-Unmodified-Since-Version': version } },
     );
+  }
+
+  async createItem(data: Record<string, any>): Promise<string> {
+    const resp = await axios.post(
+      `${this.baseUrl}/users/${this.userId}/items`,
+      [data],
+      { headers: { ...this.headers, 'Content-Type': 'application/json' } },
+    )
+    const key = resp.data.successful?.['0']?.key
+    if (!key) throw new Error('Zotero createItem failed: ' + JSON.stringify(resp.data.failed ?? {}))
+    return key
+  }
+
+  async createAttachment(parentKey: string, filename: string): Promise<string> {
+    const resp = await axios.post(
+      `${this.baseUrl}/users/${this.userId}/items`,
+      [{
+        itemType: 'attachment',
+        parentItem: parentKey,
+        linkMode: 'imported_file',
+        title: filename,
+        contentType: 'application/pdf',
+        filename,
+      }],
+      { headers: { ...this.headers, 'Content-Type': 'application/json' } },
+    )
+    const key = resp.data.successful?.['0']?.key
+    if (!key) throw new Error('Zotero createAttachment failed: ' + JSON.stringify(resp.data.failed ?? {}))
+    return key
   }
 }

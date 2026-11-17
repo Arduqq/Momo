@@ -2,6 +2,7 @@
 
 declare global {
   interface Window {
+    momoFiles: { pathFor: (file: File) => string }
     ipcRenderer: {
       on: (channel: string, listener: (event: any, ...args: any[]) => void) => void
       off: (channel: string, ...args: any[]) => void
