@@ -1,7 +1,7 @@
 {
   "name": "momo",
   "private": true,
-  "version": "0.0.6",
+  "version": "0.0.7",
   "main": "dist-electron/main.js",
   "type": "module",
   "scripts": {
@@ -50,7 +50,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
